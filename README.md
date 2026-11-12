@@ -1,4 +1,4 @@
-# Outbreak Rewind · Milestone 1
+# Outbreak Rewind · Milestone 2
 
 Outbreak Rewind is a synthetic public-health investigation console for reconstructing evidence timelines, case relationships, contradictions, and competing hypotheses. **Project Orion contains fictional data only; it is not a clinical or epidemiological decision system.**
 
@@ -28,6 +28,16 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 The API is available at `http://localhost:8000`; Swagger is at `http://localhost:8000/docs`.
+
+### Local SQLite smoke test
+
+PostgreSQL is optional. The backend defaults to `sqlite:///./orion.db`, stores uploads in
+`backend/evidence_storage`, and accepts synthetic CSV, JSON, PDF, and TXT files through
+`POST /api/evidence/upload` (multipart field `files`). Files are size-limited, extension and
+MIME validated, hashed, extracted, normalized, validated, and assigned a processing status.
+Image-only PDFs are rendered and processed with Tesseract OCR. If the local Tesseract executable is unavailable, the upload is retained as `needs_review` with an explicit error. The Docker image installs Tesseract automatically.
+Use `GET /api/evidence`, `GET /api/evidence/{id}`, and
+`GET /api/evidence/{id}/records` to inspect ingestion and provenance. Extracted records can be manually verified or rejected from the Evidence Vault.
 
 ### Frontend
 
@@ -66,5 +76,7 @@ The frontend includes Overview, Investigations, Evidence Vault, Timeline Reconst
 - `npm install`
 - `npm run build`
 - `python -m compileall -q backend/app`
+- `python -m pytest backend/tests -q`
+- Docker PostgreSQL health and upload/readback smoke test
 
-The frontend build passes. API import validation is environment-dependent when the host blocks native Pydantic DLLs; PostgreSQL connectivity requires Docker to be running.
+The frontend build passes. Local image-only PDF OCR requires the Tesseract executable on `PATH`; Docker installs it automatically.

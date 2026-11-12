@@ -1,11 +1,13 @@
 from datetime import date
-from fastapi import Depends, FastAPI, HTTPException
+import json
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 from .config import settings
 from .db import Base, engine, get_db
-from .models import Event
+from .models import Event, EvidenceRecord
+from .evidence import evidence_dict, ingest_upload
 from .schemas import EventRead, HealthRead
 
 app = FastAPI(title="Outbreak Rewind API", version="0.1.0")
@@ -63,8 +65,78 @@ def investigation(investigation_id: str) -> dict:
     return {**item, "synthetic": True, "events": SEED, "evidence": EVIDENCE}
 
 @app.get("/api/evidence")
-def evidence() -> list[dict]:
-    return EVIDENCE
+def evidence(db: Session = Depends(get_db), investigation_id: str | None = None, status: str | None = None) -> list[dict]:
+    query = select(EvidenceRecord).order_by(EvidenceRecord.uploaded_at.desc())
+    if investigation_id:
+        query = query.where(EvidenceRecord.investigation_id == investigation_id)
+    if status:
+        query = query.where(EvidenceRecord.status == status)
+    uploaded = [evidence_dict(item) for item in db.scalars(query).all()]
+    return uploaded + EVIDENCE
+
+@app.post("/api/evidence/upload")
+def upload_evidence(
+    files: list[UploadFile] = File(...),
+    investigation_id: str = "ORION-001",
+    category: str = Form("Other"),
+    db: Session = Depends(get_db),
+) -> dict:
+    if not files or len(files) > 20:
+        raise HTTPException(status_code=400, detail="Upload between 1 and 20 files")
+    results = []
+    for upload in files:
+        try:
+            results.append(evidence_dict(ingest_upload(upload, investigation_id, db, category)))
+        except ValueError as exc:
+            raise HTTPException(status_code=415, detail=str(exc)) from exc
+    return {"items": results}
+
+@app.get("/api/evidence/{evidence_id}")
+def evidence_detail(evidence_id: str, db: Session = Depends(get_db)) -> dict:
+    item = db.get(EvidenceRecord, evidence_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+    result = evidence_dict(item)
+    result.update({"provenance": json.loads(item.provenance), "validation_errors": json.loads(item.validation_errors)})
+    return result
+
+@app.get("/api/evidence/{evidence_id}/records")
+def evidence_records(evidence_id: str, db: Session = Depends(get_db)) -> dict:
+    item = db.get(EvidenceRecord, evidence_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+    return {"evidence_id": evidence_id, "records": json.loads(item.records_json)}
+
+@app.get("/api/evidence/{evidence_id}/status")
+def evidence_status(evidence_id: str, db: Session = Depends(get_db)) -> dict:
+    item = db.get(EvidenceRecord, evidence_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+    return {"evidence_id": item.id, "stage": item.processing_stage, "extraction_status": item.status, "validation_status": item.status, "errors": json.loads(item.validation_errors), "completed_at": item.uploaded_at.isoformat() if item.processing_stage == "completed" else None}
+
+@app.get("/api/evidence/{evidence_id}/source")
+def evidence_source(evidence_id: str, db: Session = Depends(get_db)):
+    from fastapi.responses import FileResponse
+    item = db.get(EvidenceRecord, evidence_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+    path = (settings.storage_dir_path / item.storage_path).resolve()
+    if settings.storage_dir_path not in path.parents or not path.is_file():
+        raise HTTPException(status_code=404, detail="Source document unavailable")
+    return FileResponse(path, filename=item.filename, media_type="application/octet-stream")
+
+@app.patch("/api/evidence/records/{record_id}/verify")
+def verify_record(record_id: str, verified: bool = True, db: Session = Depends(get_db)) -> dict:
+    matches = db.scalars(select(EvidenceRecord)).all()
+    for item in matches:
+        records = json.loads(item.records_json)
+        for record in records:
+            if record.get("record_id") == record_id:
+                record["verification_status"] = "VERIFIED" if verified else "REJECTED"
+                item.records_json = json.dumps(records)
+                db.commit()
+                return {"record_id": record_id, "verification_status": record["verification_status"]}
+    raise HTTPException(status_code=404, detail="Extracted record not found")
 
 @app.get("/api/dashboard/summary")
 def dashboard_summary() -> dict[str, int]:

@@ -11,3 +11,7 @@ vite.config.d.ts
 .env
 backend/.env
 *.db
+
+.pytest_cache/
+backend/.pytest_cache/
+evidence_storage/
