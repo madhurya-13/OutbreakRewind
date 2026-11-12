@@ -1,0 +1,10 @@
+{
+  "name": "Project Orion",
+  "synthetic": true,
+  "description": "A fictional respiratory outbreak investigation used exclusively for demonstrating the platform.",
+  "individuals": ["P001", "P002", "P003", "P004", "P005", "P006", "P007", "P008", "P009", "P010"],
+  "locations": ["LOC-01", "LOC-02", "LOC-03", "LOC-04"],
+  "case_events": 15,
+  "contact_records": 12,
+  "laboratory_records": 8
+}
