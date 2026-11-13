@@ -52,3 +52,18 @@ export const verifyTimelineEvent = (eventId: string, verified = true) => fetch(`
   if (!response.ok) throw new Error((await response.text()) || `Verification failed (${response.status})`)
   return response.json() as Promise<{ event_id: string; verification_status: string }>
 })
+export type GraphNode = { id: string; node_type: string; entity_id: string; display_label: string; metadata: Record<string, unknown> }
+export type GraphRelationship = { id: string; source: string; target: string; relationship_type: string; classification: string; confidence?: number; derivation_method: string; explanation: string; start_date?: string; end_date?: string; verification_status: string; sources: Array<{ evidence_id?: string; reconstructed_event_id?: string; extracted_record_id?: string; source_description: string }> }
+export type GraphPayload = { investigation_id: string; nodes: GraphNode[]; relationships: GraphRelationship[] }
+export const fetchGraph = (investigationId: string, params = '') => get<GraphPayload>(`/api/graph/${investigationId}${params}`)
+export const rebuildGraph = (investigationId: string) => fetch(`${API_URL}/api/graph/rebuild/${investigationId}`, { method: 'POST' }).then(async response => {
+  if (!response.ok) throw new Error((await response.text()) || `Graph rebuild failed (${response.status})`)
+  return response.json() as Promise<{ node_count: number; relationship_count: number; snapshot_version: number }>
+})
+export const fetchGraphRelationship = (investigationId: string, relationshipId: string) => get<GraphRelationship>(`/api/graph/${investigationId}/relationships/${encodeURIComponent(relationshipId)}`)
+export const reviewGraphRelationship = (relationshipId: string, verificationStatus: 'VERIFIED' | 'REJECTED' | 'UNVERIFIED', reviewerNote: string) =>
+  fetch(`${API_URL}/api/graph/relationships/${encodeURIComponent(relationshipId)}/review`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ verification_status: verificationStatus, reviewer_note: reviewerNote }) }).then(async response => {
+    if (!response.ok) throw new Error((await response.text()) || `Relationship review failed (${response.status})`)
+    return response.json() as Promise<GraphRelationship>
+  })
+export const fetchGraphMetrics = (investigationId: string) => get<Record<string, unknown>>(`/api/graph/${investigationId}/metrics`)

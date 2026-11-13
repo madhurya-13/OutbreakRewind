@@ -7,9 +7,13 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 from .config import settings
 from .db import Base, engine, get_db
-from .models import Event, EventAudit, EventSource, EvidenceRecord, ReconstructedEvent, TemporalFinding, TemporalRelationship, TimelineSnapshot
+from .models import Event, EventAudit, EventSource, EvidenceRecord, GraphRelationship, GraphNode, ReconstructedEvent, RelationshipReviewHistory, TemporalFinding, TemporalRelationship, TimelineSnapshot
 from .evidence import evidence_dict, ingest_upload
-from .schemas import EventCorrection, EventRead, HealthRead
+from .schemas import EventCorrection, EventRead, HealthRead, RelationshipReview
+from .intelligence.graph_service import (
+    graph_metrics_from_graph, graph_payload, network_for_person, paths_for_people,
+    rebuild_graph, relationship_detail,
+)
 from .temporal_engine import EVENT_TAXONOMY, event_to_dict, reconstruct_timeline
 
 app = FastAPI(title="Outbreak Rewind API", version="0.1.0")
@@ -285,3 +289,102 @@ def correct_timeline_event(event_id: str, changes: EventCorrection, db: Session 
     ))
     db.commit()
     return event_to_dict(db, event)
+
+
+@app.post("/api/graph/rebuild/{investigation_id}")
+def rebuild_case_graph(investigation_id: str, db: Session = Depends(get_db)) -> dict:
+    if not any(item["investigation_id"] == investigation_id for item in INVESTIGATIONS):
+        raise HTTPException(status_code=404, detail="Investigation not found")
+    try:
+        return rebuild_graph(investigation_id, db)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Graph reconstruction failed") from exc
+
+
+@app.get("/api/graph/{investigation_id}")
+def get_case_graph(
+    investigation_id: str,
+    db: Session = Depends(get_db),
+    node_type: str | None = None,
+    relationship_type: str | None = None,
+    verification_status: str | None = None,
+    person_id: str | None = None,
+    location_id: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    include_possible: bool = True,
+) -> dict:
+    return graph_payload(investigation_id, db, {
+        "node_type": node_type, "relationship_type": relationship_type, "verification_status": verification_status,
+        "person_id": person_id, "location_id": location_id, "start_date": start_date, "end_date": end_date,
+        "include_possible": include_possible,
+    })
+
+
+@app.get("/api/graph/{investigation_id}/nodes/{node_id}")
+def get_graph_node(investigation_id: str, node_id: str, db: Session = Depends(get_db)) -> dict:
+    node = db.scalar(select(GraphNode).where(GraphNode.investigation_id == investigation_id, GraphNode.node_id == node_id))
+    if not node:
+        raise HTTPException(status_code=404, detail="Graph node not found")
+    result = {
+        "id": node.node_id, "node_type": node.node_type, "entity_id": node.entity_id,
+        "display_label": node.display_label, "metadata": json.loads(node.metadata_json),
+    }
+    return result
+
+
+@app.get("/api/graph/{investigation_id}/relationships/{relationship_id}")
+def get_graph_relationship(investigation_id: str, relationship_id: str, db: Session = Depends(get_db)) -> dict:
+    relationship = db.scalar(select(GraphRelationship).where(
+        GraphRelationship.investigation_id == investigation_id,
+        GraphRelationship.relationship_id == relationship_id,
+    ))
+    if not relationship:
+        raise HTTPException(status_code=404, detail="Graph relationship not found")
+    return relationship_detail(db, relationship_id) or {}
+
+
+@app.get("/api/graph/{investigation_id}/persons/{person_id}/network")
+def get_person_network(investigation_id: str, person_id: str, depth: int = 1, db: Session = Depends(get_db)) -> dict:
+    return network_for_person(investigation_id, person_id, db, depth)
+
+
+@app.get("/api/graph/{investigation_id}/metrics")
+def get_graph_metrics(investigation_id: str, db: Session = Depends(get_db)) -> dict:
+    payload = graph_payload(investigation_id, db)
+    import networkx as nx
+    graph = nx.Graph()
+    graph.add_nodes_from(item["id"] for item in payload["nodes"])
+    graph.add_edges_from((item["source"], item["target"]) for item in payload["relationships"])
+    relationships = db.scalars(select(GraphRelationship).where(GraphRelationship.investigation_id == investigation_id)).all()
+    return graph_metrics_from_graph(graph, relationships)
+
+
+@app.get("/api/graph/{investigation_id}/paths")
+def get_graph_path(investigation_id: str, source_person: str, target_person: str, db: Session = Depends(get_db)) -> dict:
+    return paths_for_people(investigation_id, source_person, target_person, db)
+
+
+@app.get("/api/graph/{investigation_id}/locations/{location_id}/network")
+def get_location_network(investigation_id: str, location_id: str, db: Session = Depends(get_db)) -> dict:
+    payload = graph_payload(investigation_id, db, {"location_id": location_id})
+    return payload
+
+
+@app.patch("/api/graph/relationships/{relationship_id}/review")
+def review_graph_relationship(relationship_id: str, review: RelationshipReview, db: Session = Depends(get_db)) -> dict:
+    relationship = db.get(GraphRelationship, relationship_id)
+    if not relationship:
+        raise HTTPException(status_code=404, detail="Graph relationship not found")
+    previous = relationship.verification_status
+    relationship.verification_status = review.verification_status
+    relationship.updated_at = datetime.now(timezone.utc)
+    db.add(RelationshipReviewHistory(
+        review_id=f"GRH-{uuid.uuid4().hex[:16].upper()}",
+        relationship_id=relationship_id, previous_status=previous,
+        new_status=review.verification_status, reviewer_note=review.reviewer_note,
+        action_timestamp=relationship.updated_at,
+    ))
+    db.commit()
+    return relationship_detail(db, relationship_id) or {}

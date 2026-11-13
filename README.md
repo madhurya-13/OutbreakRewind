@@ -115,3 +115,31 @@ ID, extracted record ID, page/row, source field, original value, and extraction 
 Upload `synthetic_data/temporal_orion.json` as JSON for a fictional temporal reconstruction
 fixture. Expected precision and finding checks are documented in
 `synthetic_data/expected_results/temporal_orion.json`.
+
+## Milestone 4 · Case relationship graph
+
+The Case Network is an evidence-backed graph projection over Milestone 2 normalized records and
+Milestone 3 reconstructed events. `POST /api/graph/rebuild/{investigation_id}` creates or refreshes
+person, location, event, and evidence nodes without duplicating them. Direct contact edges require
+an explicit `contact_person_id`; shared-location edges distinguish overlapping intervals from
+non-overlapping and incomplete dates; shared-event edges require an explicit `shared_event_id`.
+
+Relationships retain source evidence, reconstructed event IDs, derivation rules, date intervals,
+classification (`EXPLICIT`, `INFERRED`, or `POSSIBLE`), and investigator review status. NetworkX
+provides descriptive centrality, connected components, communities, bounded neighborhoods, and
+shortest paths. These metrics do not represent infection risk or prove transmission.
+
+Graph endpoints include:
+
+- `POST /api/graph/rebuild/{investigation_id}`
+- `GET /api/graph/{investigation_id}`
+- `GET /api/graph/{investigation_id}/nodes/{node_id}`
+- `GET /api/graph/{investigation_id}/relationships/{relationship_id}`
+- `GET /api/graph/{investigation_id}/metrics`
+- `GET /api/graph/{investigation_id}/persons/{person_id}/network`
+- `GET /api/graph/{investigation_id}/locations/{location_id}/network`
+- `GET /api/graph/{investigation_id}/paths`
+- `PATCH /api/graph/relationships/{relationship_id}/review`
+
+The schema is managed by Alembic revision `0002_graph_schema`, and graph rebuilds preserve
+investigator review decisions and provenance.

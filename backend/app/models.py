@@ -113,5 +113,65 @@ class EventAudit(Base):
     new_value: Mapped[str] = mapped_column(Text, nullable=False)
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
+class GraphNode(Base):
+    __tablename__ = "graph_nodes"
+    node_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    investigation_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    node_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    entity_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    display_label: Mapped[str] = mapped_column(String(255), nullable=False)
+    metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+class GraphRelationship(Base):
+    __tablename__ = "graph_relationships"
+    relationship_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    investigation_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    source_node_id: Mapped[str] = mapped_column(ForeignKey("graph_nodes.node_id", ondelete="CASCADE"), nullable=False, index=True)
+    target_node_id: Mapped[str] = mapped_column(ForeignKey("graph_nodes.node_id", ondelete="CASCADE"), nullable=False, index=True)
+    relationship_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    relationship_classification: Mapped[str] = mapped_column(String(24), nullable=False)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    derivation_method: Mapped[str] = mapped_column(String(120), nullable=False)
+    explanation: Mapped[str] = mapped_column(Text, nullable=False)
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    verification_status: Mapped[str] = mapped_column(String(24), nullable=False, default="UNVERIFIED", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+class RelationshipSource(Base):
+    __tablename__ = "relationship_sources"
+    source_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    relationship_id: Mapped[str] = mapped_column(ForeignKey("graph_relationships.relationship_id", ondelete="CASCADE"), nullable=False, index=True)
+    evidence_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    reconstructed_event_id: Mapped[str | None] = mapped_column(ForeignKey("reconstructed_events.event_id", ondelete="CASCADE"), nullable=True, index=True)
+    extracted_record_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    source_description: Mapped[str] = mapped_column(Text, nullable=False)
+
+class GraphSnapshot(Base):
+    __tablename__ = "graph_snapshots"
+    snapshot_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    investigation_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    snapshot_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    node_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    relationship_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    metrics_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    filters_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+class RelationshipReviewHistory(Base):
+    __tablename__ = "relationship_review_history"
+    review_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    relationship_id: Mapped[str] = mapped_column(ForeignKey("graph_relationships.relationship_id", ondelete="CASCADE"), nullable=False, index=True)
+    previous_status: Mapped[str] = mapped_column(String(24), nullable=False)
+    new_status: Mapped[str] = mapped_column(String(24), nullable=False)
+    reviewer_note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    action_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
 Index("ix_event_source_evidence_record", EventSource.event_id, EventSource.evidence_id, EventSource.extracted_record_id, unique=True)
 Index("ix_temporal_relationship_pair", TemporalRelationship.event_id, TemporalRelationship.related_event_id, unique=True)
+Index("uq_graph_node_entity", GraphNode.investigation_id, GraphNode.node_type, GraphNode.entity_id, unique=True)
+Index("uq_graph_relationship_pair", GraphRelationship.investigation_id, GraphRelationship.source_node_id, GraphRelationship.target_node_id, GraphRelationship.relationship_type, unique=True)
+Index("uq_relationship_source", RelationshipSource.relationship_id, RelationshipSource.evidence_id, RelationshipSource.reconstructed_event_id, RelationshipSource.extracted_record_id, unique=True)

@@ -28,3 +28,7 @@ class EventCorrection(BaseModel):
     event_date: date | None = None
     event_end_date: date | None = None
     temporal_status: Literal["NORMAL", "WARNING", "REQUIRES_REVIEW", "UNRESOLVED"] | None = None
+
+class RelationshipReview(BaseModel):
+    verification_status: Literal["VERIFIED", "REJECTED", "UNVERIFIED"]
+    reviewer_note: str = ""

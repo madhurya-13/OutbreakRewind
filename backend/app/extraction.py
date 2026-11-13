@@ -1,6 +1,8 @@
 """Deterministic document extraction, field normalization, and validation."""
-import io
+import csv
 import json
+import io
+import warnings
 from collections.abc import Iterable
 from datetime import datetime
 from typing import Any
@@ -17,12 +19,14 @@ ALIASES = {
 def extract_bytes(filename: str, payload: bytes) -> list[dict[str, Any]]:
     extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if extension == "csv":
-        import pandas as pd
-        frame = pd.read_csv(io.BytesIO(payload), on_bad_lines="warn")
-        return [
-            {**row, "_source_row": index + 2}
-            for index, row in enumerate(frame.where(frame.notna(), None).to_dict(orient="records"))
-        ]
+        reader = csv.DictReader(io.StringIO(payload.decode("utf-8-sig")))
+        records = []
+        for index, row in enumerate(reader, 2):
+            if None in row:
+                warnings.warn(f"Skipping extra CSV fields on row {index}", RuntimeWarning, stacklevel=2)
+                row.pop(None, None)
+            records.append({**row, "_source_row": index})
+        return records
     if extension == "json":
         value = json.loads(payload.decode("utf-8-sig"))
         if isinstance(value, dict):
