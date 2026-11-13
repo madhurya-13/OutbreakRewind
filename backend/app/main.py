@@ -1,14 +1,16 @@
-from datetime import date
+from datetime import date, datetime, timezone
 import json
+import uuid
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 from .config import settings
 from .db import Base, engine, get_db
-from .models import Event, EvidenceRecord
+from .models import Event, EventAudit, EventSource, EvidenceRecord, ReconstructedEvent, TemporalFinding, TemporalRelationship, TimelineSnapshot
 from .evidence import evidence_dict, ingest_upload
-from .schemas import EventRead, HealthRead
+from .schemas import EventCorrection, EventRead, HealthRead
+from .temporal_engine import EVENT_TAXONOMY, event_to_dict, reconstruct_timeline
 
 app = FastAPI(title="Outbreak Rewind API", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=[settings.frontend_origin], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -145,3 +147,141 @@ def dashboard_summary() -> dict[str, int]:
 @app.get("/api/events", response_model=list[EventRead])
 def events(db: Session = Depends(get_db)) -> list[Event]:
     return list(db.scalars(select(Event).order_by(Event.date.desc())).all())
+
+
+@app.post("/api/timeline/reconstruct/{investigation_id}")
+def reconstruct(investigation_id: str, db: Session = Depends(get_db)) -> dict:
+    if not any(item["investigation_id"] == investigation_id for item in INVESTIGATIONS):
+        raise HTTPException(status_code=404, detail="Investigation not found")
+    try:
+        return reconstruct_timeline(investigation_id, db)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Timeline reconstruction failed") from exc
+
+
+@app.get("/api/timeline/{investigation_id}")
+def timeline(
+    investigation_id: str,
+    db: Session = Depends(get_db),
+    date_from: date | None = None,
+    date_to: date | None = None,
+    event_type: str | None = None,
+    person_id: str | None = None,
+    include_unresolved: bool = True,
+) -> list[dict]:
+    query = select(ReconstructedEvent).where(ReconstructedEvent.investigation_id == investigation_id)
+    if date_from:
+        query = query.where(ReconstructedEvent.event_date >= date_from)
+    if date_to:
+        query = query.where(ReconstructedEvent.event_date <= date_to)
+    if event_type:
+        query = query.where(ReconstructedEvent.event_type == event_type)
+    if person_id:
+        query = query.where(ReconstructedEvent.person_id == person_id)
+    if not include_unresolved:
+        query = query.where(ReconstructedEvent.temporal_status == "NORMAL")
+    events = list(db.scalars(query).all())
+    events.sort(key=lambda item: (item.event_date is None, item.event_date or date.max, item.event_id))
+    return [event_to_dict(db, event) for event in events]
+
+
+@app.get("/api/timeline/{investigation_id}/events/{event_id}")
+def timeline_event(investigation_id: str, event_id: str, db: Session = Depends(get_db)) -> dict:
+    event = db.scalar(select(ReconstructedEvent).where(
+        ReconstructedEvent.investigation_id == investigation_id,
+        ReconstructedEvent.event_id == event_id,
+    ))
+    if not event:
+        raise HTTPException(status_code=404, detail="Reconstructed event not found")
+    return event_to_dict(db, event)
+
+
+@app.get("/api/timeline/{investigation_id}/findings")
+def timeline_findings(investigation_id: str, db: Session = Depends(get_db)) -> list[dict]:
+    findings = db.scalars(select(TemporalFinding).where(TemporalFinding.investigation_id == investigation_id).order_by(TemporalFinding.created_at.desc())).all()
+    return [{column.name: getattr(item, column.name) for column in item.__table__.columns} for item in findings]
+
+
+@app.get("/api/timeline/{investigation_id}/relationships")
+def timeline_relationships(investigation_id: str, db: Session = Depends(get_db)) -> list[dict]:
+    event_ids = select(ReconstructedEvent.event_id).where(ReconstructedEvent.investigation_id == investigation_id)
+    relationships = db.scalars(select(TemporalRelationship).where(TemporalRelationship.event_id.in_(event_ids))).all()
+    return [{column.name: getattr(item, column.name) for column in item.__table__.columns} for item in relationships]
+
+
+@app.get("/api/timeline/{investigation_id}/snapshots")
+def timeline_snapshots(investigation_id: str, db: Session = Depends(get_db)) -> list[dict]:
+    snapshots = db.scalars(select(TimelineSnapshot).where(TimelineSnapshot.investigation_id == investigation_id).order_by(TimelineSnapshot.version_number.desc())).all()
+    return [{column.name: getattr(item, column.name) for column in item.__table__.columns} for item in snapshots]
+
+
+@app.get("/api/timeline/{investigation_id}/statistics")
+def timeline_statistics(investigation_id: str, db: Session = Depends(get_db)) -> dict:
+    events = list(db.scalars(select(ReconstructedEvent).where(ReconstructedEvent.investigation_id == investigation_id)).all())
+    findings = list(db.scalars(select(TemporalFinding).where(TemporalFinding.investigation_id == investigation_id)).all())
+    return {
+        "total_events": len(events),
+        "identified_event_types": sorted({event.event_type for event in events}),
+        "exact_dates": sum(event.date_precision == "DAY" for event in events),
+        "approximate_dates": sum(event.date_precision in {"MONTH", "YEAR", "APPROXIMATE", "RANGE"} for event in events),
+        "events_requiring_review": sum(event.temporal_status == "REQUIRES_REVIEW" for event in events),
+        "unresolved_dates": sum(event.date_precision in {"UNKNOWN", "AMBIGUOUS"} for event in events),
+        "potential_duplicate_groups": sum(item.finding_type == "POTENTIAL_DUPLICATE" for item in findings),
+        "temporal_findings": len(findings),
+    }
+
+
+@app.get("/api/timeline/{investigation_id}/persons/{person_id}")
+def person_timeline(investigation_id: str, person_id: str, db: Session = Depends(get_db)) -> list[dict]:
+    events = db.scalars(select(ReconstructedEvent).where(
+        ReconstructedEvent.investigation_id == investigation_id,
+        ReconstructedEvent.person_id == person_id,
+    )).all()
+    return [event_to_dict(db, event) for event in sorted(events, key=lambda item: (item.event_date is None, item.event_date or date.max, item.event_id))]
+
+
+@app.get("/api/timeline/{investigation_id}/sources/{event_id}")
+def timeline_sources(investigation_id: str, event_id: str, db: Session = Depends(get_db)) -> list[dict]:
+    event = db.scalar(select(ReconstructedEvent).where(ReconstructedEvent.investigation_id == investigation_id, ReconstructedEvent.event_id == event_id))
+    if not event:
+        raise HTTPException(status_code=404, detail="Reconstructed event not found")
+    sources = db.scalars(select(EventSource).where(EventSource.event_id == event_id)).all()
+    return [{column.name: getattr(item, column.name) for column in item.__table__.columns} for item in sources]
+
+
+@app.post("/api/timeline/events/{event_id}/verify")
+def verify_timeline_event(event_id: str, verified: bool = True, db: Session = Depends(get_db)) -> dict:
+    event = db.get(ReconstructedEvent, event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="Reconstructed event not found")
+    event.verification_status = "VERIFIED" if verified else "REJECTED"
+    event.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"event_id": event_id, "verification_status": event.verification_status}
+
+
+@app.patch("/api/timeline/events/{event_id}")
+def correct_timeline_event(event_id: str, changes: EventCorrection, db: Session = Depends(get_db)) -> dict:
+    event = db.get(ReconstructedEvent, event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="Reconstructed event not found")
+    payload = changes.model_dump(exclude_unset=True)
+    actor = str(payload.pop("actor", "investigator"))
+    allowed = {"event_description", "event_type", "person_id", "location_id", "location_name", "event_date", "event_end_date", "temporal_status"}
+    update = {key: value for key, value in payload.items() if key in allowed}
+    if not update:
+        raise HTTPException(status_code=422, detail="No correctable event fields supplied")
+    previous = {key: getattr(event, key) for key in update}
+    for key, value in update.items():
+        if key == "event_type" and value not in EVENT_TAXONOMY:
+            raise HTTPException(status_code=422, detail="Unsupported event type")
+        setattr(event, key, value)
+    event.updated_at = datetime.now(timezone.utc)
+    db.add(EventAudit(
+        audit_id=f"AUD-{uuid.uuid4().hex[:12].upper()}", event_id=event_id, actor=actor,
+        previous_value=json.dumps(previous, default=str), new_value=json.dumps(update, default=str),
+        changed_at=event.updated_at,
+    ))
+    db.commit()
+    return event_to_dict(db, event)

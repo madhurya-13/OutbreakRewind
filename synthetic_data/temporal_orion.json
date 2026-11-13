@@ -1,0 +1,14 @@
+{
+  "records": [
+    {"person_id": "P001", "symptom_start_date": "2024-06-01", "contact_date": "2024-06-02", "contact_date_2": "2024-06-03", "visit_date": "2024-06-03", "collection_date": "2024-06-04", "confirmation_date": "2024-06-05", "location_id": "LOC-01", "description": "Initial symptoms and household contact."},
+    {"person_id": "P002", "symptom_start_date": "2024-06-03", "contact_date": "2024-06-04", "contact_date_2": "2024-06-05", "visit_date": "2024-06-05", "collection_date": "2024-06-06", "confirmation_date": "2024-06-07", "location_id": "LOC-01", "description": "Household contact interview."},
+    {"person_id": "P003", "symptom_start_date": "2024-06-05", "contact_date": "2024-06-06", "contact_date_2": "2024-06-07", "visit_date": "2024-06-07", "collection_date": "2024-06-08", "confirmation_date": "2024-06-09", "location_id": "LOC-02", "description": "Workplace exposure report."},
+    {"person_id": "P004", "symptom_start_date": "June 2024", "contact_date": "2024-06-08", "contact_date_2": "2024-06-09", "visit_date": "2024-06-09", "collection_date": "2024-06-10", "confirmation_date": "2024-06-11", "location_id": "LOC-02", "description": "Month-only onset reported."},
+    {"person_id": "P005", "symptom_start_date": "early June 2024", "contact_date": "2024-06-10", "contact_date_2": "2024-06-11", "visit_date": "2024-06-11", "collection_date": "2024-06-12", "confirmation_date": "2024-06-13", "location_id": "LOC-03", "description": "Approximate onset from interview."},
+    {"person_id": "P006", "symptom_start_date": "06/11/2024", "contact_date": "2024-06-12", "collection_date": "2024-06-14", "confirmation_date": "2024-06-15", "location_id": "LOC-03", "description": "Ambiguous source date."},
+    {"person_id": "P007", "symptom_start_date": null, "contact_date": "2024-06-14", "collection_date": "2024-06-16", "confirmation_date": "2024-06-17", "location_id": "LOC-04", "description": "Onset date not recorded."},
+    {"person_id": "P008", "symptom_start_date": "2024-06-15", "contact_date": "2024-06-16", "collection_date": "2024-06-18", "confirmation_date": "2024-06-17", "location_id": "LOC-04", "description": "Confirmation precedes collection and requires review."},
+    {"person_id": "P009", "symptom_start_date": "2024-06-18", "contact_date": "2024-06-19", "collection_date": "2024-06-20", "confirmation_date": "2024-06-21", "location_id": "LOC-01", "description": "Delayed report from sentinel site."},
+    {"person_id": "P010", "symptom_start_date": "2024-06-20", "contact_date": "2024-06-21", "collection_date": "2024-06-23", "confirmation_date": "2024-06-24", "location_id": "LOC-02", "description": "Possible duplicate contact event."}
+  ]
+}

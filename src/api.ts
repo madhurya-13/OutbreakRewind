@@ -1,4 +1,4 @@
-const API_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:8000'
+export const API_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:8000'
 async function get<T>(path: string): Promise<T> {
   const response = await fetch(`${API_URL}${path}`)
   if (!response.ok) throw new Error(`API responded ${response.status}`)
@@ -32,3 +32,23 @@ export async function uploadEvidence(files: File[], category = 'Other', onProgre
   return response.json() as Promise<{ items: Evidence[] }>
 }
 export const fetchEvents = () => get<unknown[]>('/api/events')
+export type TimelineEvent = {
+  event_id: string; investigation_id: string; person_id?: string; event_type: string; event_description: string
+  event_date?: string; event_end_date?: string; date_precision: string; date_confidence: number
+  original_date_value?: string; date_interpretation?: string; report_date?: string
+  location_id?: string; location_name?: string; temporal_status: string; verification_status: string
+  classification_confidence: number; sources?: Array<{ evidence_id: string; extracted_record_id?: string; source_page?: number; source_row?: number; source_field?: string }>
+}
+export type TimelineFinding = { finding_id: string; event_id?: string; related_event_id?: string; finding_type: string; severity: string; description: string; review_status: string }
+export type TimelineStatistics = { total_events: number; identified_event_types: string[]; exact_dates: number; approximate_dates: number; events_requiring_review: number; unresolved_dates: number; potential_duplicate_groups: number; temporal_findings: number }
+export const fetchTimeline = (investigationId: string, params = '') => get<TimelineEvent[]>(`/api/timeline/${investigationId}${params}`)
+export const fetchTimelineFindings = (investigationId: string) => get<TimelineFinding[]>(`/api/timeline/${investigationId}/findings`)
+export const fetchTimelineStatistics = (investigationId: string) => get<TimelineStatistics>(`/api/timeline/${investigationId}/statistics`)
+export const reconstructTimeline = (investigationId: string) => fetch(`${API_URL}/api/timeline/reconstruct/${investigationId}`, { method: 'POST' }).then(async response => {
+  if (!response.ok) throw new Error((await response.text()) || `Reconstruction failed (${response.status})`)
+  return response.json() as Promise<{ event_count: number; version_number: number }>
+})
+export const verifyTimelineEvent = (eventId: string, verified = true) => fetch(`${API_URL}/api/timeline/events/${encodeURIComponent(eventId)}/verify?verified=${verified}`, { method: 'POST' }).then(async response => {
+  if (!response.ok) throw new Error((await response.text()) || `Verification failed (${response.status})`)
+  return response.json() as Promise<{ event_id: string; verification_status: string }>
+})

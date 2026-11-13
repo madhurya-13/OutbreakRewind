@@ -1,0 +1,12 @@
+{
+  "fixture": "temporal_orion.json",
+  "expected": {
+    "people": 10,
+    "locations": 4,
+    "minimum_reconstructed_events": 25,
+    "required_precisions": ["DAY", "MONTH", "APPROXIMATE", "AMBIGUOUS", "UNKNOWN"],
+    "required_findings": ["UNCERTAIN_DATE", "CONFIRMATION_BEFORE_SAMPLE"],
+    "source_traceability": true,
+    "chronological_order": "event_date ascending, unresolved dates last"
+  }
+}

@@ -1,4 +1,4 @@
-# Outbreak Rewind · Milestone 2
+# Outbreak Rewind · Milestone 3
 
 Outbreak Rewind is a synthetic public-health investigation console for reconstructing evidence timelines, case relationships, contradictions, and competing hypotheses. **Project Orion contains fictional data only; it is not a clinical or epidemiological decision system.**
 
@@ -78,5 +78,40 @@ The frontend includes Overview, Investigations, Evidence Vault, Timeline Reconst
 - `python -m compileall -q backend/app`
 - `python -m pytest backend/tests -q`
 - Docker PostgreSQL health and upload/readback smoke test
+- `alembic upgrade head` from `backend`
 
 The frontend build passes. Local image-only PDF OCR requires the Tesseract executable on `PATH`; Docker installs it automatically.
+Schema changes are managed with Alembic. For a fresh database, run `cd backend; alembic upgrade head`
+before starting the API. Existing Milestone 1/2 databases should be migrated before using the
+temporal endpoints.
+
+## Milestone 3 · Temporal reconstruction
+
+The temporal engine is deterministic and does not require an external LLM. It reads normalized
+Milestone 2 records, classifies event fields using the centralized taxonomy, preserves original
+date values, and stores normalized date bounds with precision and review status. Exact dates are
+ordered first; ranges and approximate dates retain their bounds; unknown dates remain unresolved
+and sort last. Ambiguous slash dates are never resolved using server locale.
+
+Reconstruction stores `reconstructed_events`, `event_sources`, `temporal_findings`,
+`temporal_relationships`, `timeline_snapshots`, and `event_audits`. Re-running reconstruction is
+incremental and preserves verified events and historical snapshots. Source links retain evidence
+ID, extracted record ID, page/row, source field, original value, and extraction method.
+
+### Temporal API
+
+- `POST /api/timeline/reconstruct/{investigation_id}`
+- `GET /api/timeline/{investigation_id}`
+- `GET /api/timeline/{investigation_id}/events/{event_id}`
+- `GET /api/timeline/{investigation_id}/findings`
+- `GET /api/timeline/{investigation_id}/relationships`
+- `GET /api/timeline/{investigation_id}/snapshots`
+- `GET /api/timeline/{investigation_id}/statistics`
+- `GET /api/timeline/{investigation_id}/persons/{person_id}`
+- `GET /api/timeline/{investigation_id}/sources/{event_id}`
+- `POST /api/timeline/events/{event_id}/verify`
+- `PATCH /api/timeline/events/{event_id}`
+
+Upload `synthetic_data/temporal_orion.json` as JSON for a fictional temporal reconstruction
+fixture. Expected precision and finding checks are documented in
+`synthetic_data/expected_results/temporal_orion.json`.
