@@ -7,13 +7,14 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 from .config import settings
 from .db import Base, engine, get_db
-from .models import Event, EventAudit, EventSource, EvidenceRecord, GraphRelationship, GraphNode, ReconstructedEvent, RelationshipReviewHistory, TemporalFinding, TemporalRelationship, TimelineSnapshot
+from .models import Contradiction, ContradictionReview, ContradictionSnapshot, Event, EventAudit, EventSource, EvidenceRecord, GraphRelationship, GraphNode, ReconstructedEvent, RelationshipReviewHistory, TemporalFinding, TemporalRelationship, TimelineSnapshot
 from .evidence import evidence_dict, ingest_upload
-from .schemas import EventCorrection, EventRead, HealthRead, RelationshipReview
+from .schemas import ContradictionReviewRequest, EventCorrection, EventRead, HealthRead, RelationshipReview
 from .intelligence.graph_service import (
     graph_metrics_from_graph, graph_payload, network_for_person, paths_for_people,
     rebuild_graph, relationship_detail,
 )
+from .intelligence.contradictions.engine import contradiction_dict, detect_contradictions
 from .temporal_engine import EVENT_TAXONOMY, event_to_dict, reconstruct_timeline
 
 app = FastAPI(title="Outbreak Rewind API", version="0.1.0")
@@ -388,3 +389,94 @@ def review_graph_relationship(relationship_id: str, review: RelationshipReview, 
     ))
     db.commit()
     return relationship_detail(db, relationship_id) or {}
+
+
+@app.post("/api/contradictions/detect/{investigation_id}")
+def detect_investigation_contradictions(investigation_id: str, db: Session = Depends(get_db)) -> dict:
+    if not any(item["investigation_id"] == investigation_id for item in INVESTIGATIONS):
+        raise HTTPException(status_code=404, detail="Investigation not found")
+    try:
+        return detect_contradictions(investigation_id, db)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Contradiction detection failed") from exc
+
+
+@app.get("/api/contradictions/{investigation_id}")
+def list_contradictions(
+    investigation_id: str, db: Session = Depends(get_db), contradiction_type: str | None = None,
+    severity: str | None = None, status: str | None = None, person_id: str | None = None,
+    page: int = 1, page_size: int = 50,
+) -> dict:
+    page = max(page, 1)
+    page_size = min(max(page_size, 1), 100)
+    query = select(Contradiction).where(Contradiction.investigation_id == investigation_id).order_by(Contradiction.last_detected_at.desc())
+    if contradiction_type: query = query.where(Contradiction.contradiction_type == contradiction_type)
+    if severity: query = query.where(Contradiction.severity == severity)
+    if status: query = query.where(Contradiction.status == status)
+    if person_id: query = query.where(Contradiction.affected_entity_id == person_id)
+    all_items = list(db.scalars(query).all())
+    start = (page - 1) * page_size
+    return {"items": [contradiction_dict(db, item) for item in all_items[start:start + page_size]], "total": len(all_items), "page": page, "page_size": page_size}
+
+
+@app.get("/api/contradictions/{investigation_id}/statistics")
+def contradiction_statistics(investigation_id: str, db: Session = Depends(get_db)) -> dict:
+    items = list(db.scalars(select(Contradiction).where(Contradiction.investigation_id == investigation_id)).all())
+    return {"total": len(items), "by_severity": {value: sum(item.severity == value for item in items) for value in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFORMATIONAL")}, "by_type": {value: sum(item.contradiction_type == value for item in items) for value in sorted({item.contradiction_type for item in items})}, "by_status": {value: sum(item.status == value for item in items) for value in ("DETECTED", "UNDER_REVIEW", "CONFIRMED_CONFLICT", "RESOLVED", "DISMISSED", "REOPENED")}}
+
+
+@app.get("/api/contradictions/{investigation_id}/snapshots")
+def contradiction_snapshots(investigation_id: str, db: Session = Depends(get_db)) -> list[dict]:
+    items = db.scalars(select(ContradictionSnapshot).where(ContradictionSnapshot.investigation_id == investigation_id).order_by(ContradictionSnapshot.snapshot_version.desc())).all()
+    return [{column.name: getattr(item, column.name) for column in item.__table__.columns} for item in items]
+
+
+@app.get("/api/contradictions/{investigation_id}/{contradiction_id}")
+def contradiction_detail(investigation_id: str, contradiction_id: str, db: Session = Depends(get_db)) -> dict:
+    item = db.scalar(select(Contradiction).where(Contradiction.investigation_id == investigation_id, Contradiction.contradiction_id == contradiction_id))
+    if not item: raise HTTPException(status_code=404, detail="Contradiction not found")
+    return contradiction_dict(db, item)
+
+
+@app.get("/api/contradictions/{investigation_id}/{contradiction_id}/comparison")
+def contradiction_comparison(investigation_id: str, contradiction_id: str, db: Session = Depends(get_db)) -> list[dict]:
+    detail = contradiction_detail(investigation_id, contradiction_id, db)
+    return detail["comparisons"]
+
+
+@app.get("/api/contradictions/{investigation_id}/{contradiction_id}/evidence")
+def contradiction_evidence(investigation_id: str, contradiction_id: str, db: Session = Depends(get_db)) -> list[dict]:
+    detail = contradiction_detail(investigation_id, contradiction_id, db)
+    return detail["evidence"]
+
+
+@app.get("/api/contradictions/{investigation_id}/{contradiction_id}/network-context")
+def contradiction_network_context(investigation_id: str, contradiction_id: str, db: Session = Depends(get_db)) -> dict:
+    item = db.scalar(select(Contradiction).where(Contradiction.investigation_id == investigation_id, Contradiction.contradiction_id == contradiction_id))
+    if not item: raise HTTPException(status_code=404, detail="Contradiction not found")
+    return {"affected_event_id": item.affected_event_id, "affected_relationship_id": item.affected_relationship_id, "person_id": item.affected_entity_id if item.affected_entity_type == "PERSON" else None}
+
+
+@app.patch("/api/contradictions/{contradiction_id}/review")
+def review_contradiction(contradiction_id: str, review: ContradictionReviewRequest, db: Session = Depends(get_db)) -> dict:
+    item = db.get(Contradiction, contradiction_id)
+    if not item: raise HTTPException(status_code=404, detail="Contradiction not found")
+    if review.action in {"RESOLVED", "DISMISSED"} and not review.review_note.strip():
+        raise HTTPException(status_code=422, detail="A review note is required to resolve or dismiss a contradiction")
+    previous = item.status
+    item.status = review.action
+    item.updated_at = datetime.now(timezone.utc)
+    db.add(ContradictionReview(review_id=f"CR-{uuid.uuid4().hex[:16].upper()}", contradiction_id=contradiction_id, reviewer=review.reviewer, action=review.action, review_note=review.review_note, previous_status=previous, new_status=review.action, created_at=item.updated_at))
+    db.commit()
+    return contradiction_dict(db, item)
+
+
+@app.post("/api/contradictions/{contradiction_id}/notes")
+def add_contradiction_note(contradiction_id: str, review: ContradictionReviewRequest, db: Session = Depends(get_db)) -> dict:
+    item = db.get(Contradiction, contradiction_id)
+    if not item: raise HTTPException(status_code=404, detail="Contradiction not found")
+    if not review.review_note.strip(): raise HTTPException(status_code=422, detail="A note is required")
+    db.add(ContradictionReview(review_id=f"CR-{uuid.uuid4().hex[:16].upper()}", contradiction_id=contradiction_id, reviewer=review.reviewer, action="NOTE", review_note=review.review_note, previous_status=item.status, new_status=item.status, created_at=datetime.now(timezone.utc)))
+    db.commit()
+    return contradiction_dict(db, item)

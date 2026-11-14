@@ -32,3 +32,8 @@ class EventCorrection(BaseModel):
 class RelationshipReview(BaseModel):
     verification_status: Literal["VERIFIED", "REJECTED", "UNVERIFIED"]
     reviewer_note: str = ""
+
+class ContradictionReviewRequest(BaseModel):
+    reviewer: str = "investigator"
+    action: Literal["UNDER_REVIEW", "CONFIRMED_CONFLICT", "RESOLVED", "DISMISSED", "REOPENED"]
+    review_note: str = ""

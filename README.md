@@ -143,3 +143,22 @@ Graph endpoints include:
 
 The schema is managed by Alembic revision `0002_graph_schema`, and graph rebuilds preserve
 investigator review decisions and provenance.
+
+## Milestone 5 · Contradiction intelligence
+
+Contradiction detection compares stored normalized evidence records, reconstructed events, and
+Milestone 3 temporal findings without changing original evidence. The deterministic engine
+supports date, location, laboratory result, sample ownership, event-order, and missing-information
+findings. Every finding stores field-level comparisons, original and normalized values, evidence
+and record references, a rule-based severity reason, an explanation, and a suggested review action.
+
+Run detection with `POST /api/contradictions/detect/{investigation_id}`. Findings are available
+through the list, detail, comparison, evidence, statistics, snapshot, and network-context
+endpoints. `PATCH /api/contradictions/{contradiction_id}/review` supports under-review,
+confirmed, resolved, dismissed, and reopened states; resolve and dismiss require a note and every
+action is retained in review history. Repeated detection is idempotent and can reopen findings
+when new evidence changes an existing conflict.
+
+The Contradiction Intelligence Center uses live backend data with severity filters, detection
+controls, side-by-side comparisons, provenance, explanations, and investigator review actions.
+The schema is managed by Alembic revision `0003_contradictions`.

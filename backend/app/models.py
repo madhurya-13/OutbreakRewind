@@ -170,8 +170,82 @@ class RelationshipReviewHistory(Base):
     reviewer_note: Mapped[str] = mapped_column(Text, nullable=False, default="")
     action_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
+class Contradiction(Base):
+    __tablename__ = "contradictions"
+    contradiction_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    investigation_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    contradiction_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    severity: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    machine_priority: Mapped[str] = mapped_column(String(24), nullable=False)
+    investigator_priority: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    affected_entity_type: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    affected_entity_id: Mapped[str | None] = mapped_column(String(96), nullable=True, index=True)
+    affected_event_id: Mapped[str | None] = mapped_column(String(48), nullable=True, index=True)
+    affected_relationship_id: Mapped[str | None] = mapped_column(String(96), nullable=True, index=True)
+    detection_rule: Mapped[str] = mapped_column(String(160), nullable=False)
+    explanation: Mapped[str] = mapped_column(Text, nullable=False)
+    suggested_action: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="DETECTED", index=True)
+    first_detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+class ContradictionEvidence(Base):
+    __tablename__ = "contradiction_evidence"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    contradiction_id: Mapped[str] = mapped_column(ForeignKey("contradictions.contradiction_id", ondelete="CASCADE"), nullable=False, index=True)
+    evidence_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    extracted_record_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    reconstructed_event_id: Mapped[str | None] = mapped_column(String(48), nullable=True, index=True)
+    graph_edge_id: Mapped[str | None] = mapped_column(String(96), nullable=True, index=True)
+    source_field: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    original_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    normalized_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_location: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    comparison_role: Mapped[str] = mapped_column(String(16), nullable=False)
+
+class ContradictionComparison(Base):
+    __tablename__ = "contradiction_comparisons"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    contradiction_id: Mapped[str] = mapped_column(ForeignKey("contradictions.contradiction_id", ondelete="CASCADE"), nullable=False, index=True)
+    field_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    source_a_value: Mapped[str] = mapped_column(Text, nullable=False)
+    source_b_value: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_a_value: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_b_value: Mapped[str] = mapped_column(Text, nullable=False)
+    comparison_rule: Mapped[str] = mapped_column(String(160), nullable=False)
+    comparison_result: Mapped[str] = mapped_column(String(64), nullable=False)
+    explanation: Mapped[str] = mapped_column(Text, nullable=False)
+
+class ContradictionReview(Base):
+    __tablename__ = "contradiction_reviews"
+    review_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    contradiction_id: Mapped[str] = mapped_column(ForeignKey("contradictions.contradiction_id", ondelete="CASCADE"), nullable=False, index=True)
+    reviewer: Mapped[str] = mapped_column(String(120), nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    review_note: Mapped[str] = mapped_column(Text, nullable=False)
+    previous_status: Mapped[str] = mapped_column(String(24), nullable=False)
+    new_status: Mapped[str] = mapped_column(String(24), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+class ContradictionSnapshot(Base):
+    __tablename__ = "contradiction_snapshots"
+    snapshot_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    investigation_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    snapshot_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    detected_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    new_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    resolved_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    run_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+
 Index("ix_event_source_evidence_record", EventSource.event_id, EventSource.evidence_id, EventSource.extracted_record_id, unique=True)
 Index("ix_temporal_relationship_pair", TemporalRelationship.event_id, TemporalRelationship.related_event_id, unique=True)
 Index("uq_graph_node_entity", GraphNode.investigation_id, GraphNode.node_type, GraphNode.entity_id, unique=True)
 Index("uq_graph_relationship_pair", GraphRelationship.investigation_id, GraphRelationship.source_node_id, GraphRelationship.target_node_id, GraphRelationship.relationship_type, unique=True)
 Index("uq_relationship_source", RelationshipSource.relationship_id, RelationshipSource.evidence_id, RelationshipSource.reconstructed_event_id, RelationshipSource.extracted_record_id, unique=True)
+Index("uq_contradiction_identity", Contradiction.investigation_id, Contradiction.contradiction_type, Contradiction.affected_entity_id, Contradiction.affected_event_id, Contradiction.detection_rule, unique=True)

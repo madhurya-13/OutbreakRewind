@@ -17,4 +17,5 @@
 .graph-node.event { border-color: #8495ec; }
 .graph-edge.possible { stroke-dasharray: 5 5; }
 .source-chip { display: inline-block; margin: 3px; padding: 3px 6px; background: #21364d; border-radius: 3px; }
+.comparison-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; padding: 8px; border-bottom: 1px solid #243449; }
 @media (max-width: 900px) { .network-layout { grid-template-columns: 1fr; } }
