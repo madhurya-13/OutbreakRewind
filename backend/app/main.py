@@ -3,19 +3,56 @@ import json
 import uuid
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 from .config import settings
 from .db import Base, engine, get_db
-from .models import Contradiction, ContradictionReview, ContradictionSnapshot, Event, EventAudit, EventSource, EvidenceRecord, GraphRelationship, GraphNode, ReconstructedEvent, RelationshipReviewHistory, TemporalFinding, TemporalRelationship, TimelineSnapshot
+from .models import Contradiction, ContradictionReview, ContradictionSnapshot, Event, EventAudit, EventSource, EvidenceRecord, GraphRelationship, GraphNode, ReconstructedEvent, RelationshipReviewHistory, TemporalFinding, TemporalRelationship, TimelineSnapshot, Hypothesis, HypothesisAssessment, HypothesisEvidenceLink, HypothesisImpactRecord, HypothesisNote, HypothesisReviewHistory, HypothesisVersion
 from .evidence import evidence_dict, ingest_upload
-from .schemas import ContradictionReviewRequest, EventCorrection, EventRead, HealthRead, RelationshipReview
+from .schemas import (ContradictionReviewRequest, EventCorrection, EventRead, HealthRead, RelationshipReview,
+                      HypothesisCompareRequest, HypothesisCreate, HypothesisEvidenceCreate,
+                      HypothesisEvidenceUpdate, HypothesisNoteCreate, HypothesisStatusUpdate,
+                      HypothesisUpdate, ImpactReviewRequest)
 from .intelligence.graph_service import (
     graph_metrics_from_graph, graph_payload, network_for_person, paths_for_people,
     rebuild_graph, relationship_detail,
 )
 from .intelligence.contradictions.engine import contradiction_dict, detect_contradictions
 from .temporal_engine import EVENT_TAXONOMY, event_to_dict, reconstruct_timeline
+from .intelligence.hypothesis import (
+    add_note,
+    analyze_source_change,
+    archive_hypothesis as archive_hypothesis_service,
+    assessment_dict,
+    build_source_catalog,
+    compare_hypotheses as compare_hypotheses_service,
+    create_hypothesis as create_hypothesis_service,
+    evaluate_hypothesis as evaluate_hypothesis_service,
+    evaluate_investigation_hypotheses as evaluate_all_hypotheses,
+    hypothesis_detail as hypothesis_detail_service,
+    hypothesis_dict,
+    hypothesis_history as hypothesis_history_service,
+    impact_dict,
+    investigation_summary,
+    latest_assessment as latest_hypothesis_assessment,
+    link_dict,
+    link_evidence,
+    list_hypotheses as list_hypotheses_service,
+    list_impacts,
+    list_links,
+    list_notes,
+    note_dict,
+    review_impact,
+    source_exists,
+    update_hypothesis as update_hypothesis_service,
+    update_link,
+    update_status as update_status_service,
+    withdraw_link,
+)
+from .intelligence.hypothesis.hypothesis_versioning import version_detail
+from .intelligence.hypothesis.serializers import version_dict
+from .intelligence.hypothesis.serializers import hypothesis_dict as _hypothesis_dict
+from .intelligence.hypothesis.serializers import now as hypothesis_now
 
 app = FastAPI(title="Outbreak Rewind API", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=[settings.frontend_origin], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -93,7 +130,13 @@ def upload_evidence(
     results = []
     for upload in files:
         try:
-            results.append(evidence_dict(ingest_upload(upload, investigation_id, db, category)))
+            item = ingest_upload(upload, investigation_id, db, category)
+            analyze_source_change(
+                db, investigation_id, "EVIDENCE_DOCUMENT", item.id,
+                trigger="EVIDENCE_UPLOADED", include_unlinked=True,
+            )
+            db.commit()
+            results.append(evidence_dict(item))
         except ValueError as exc:
             raise HTTPException(status_code=415, detail=str(exc)) from exc
     return {"items": results}
@@ -141,13 +184,30 @@ def verify_record(record_id: str, verified: bool = True, db: Session = Depends(g
             if record.get("record_id") == record_id:
                 record["verification_status"] = "VERIFIED" if verified else "REJECTED"
                 item.records_json = json.dumps(records)
+                analyze_source_change(
+                    db, item.investigation_id, "EXTRACTED_RECORD", record_id,
+                    trigger="EXTRACTED_RECORD_VERIFIED", include_unlinked=False,
+                )
                 db.commit()
                 return {"record_id": record_id, "verification_status": record["verification_status"]}
     raise HTTPException(status_code=404, detail="Extracted record not found")
 
 @app.get("/api/dashboard/summary")
-def dashboard_summary() -> dict[str, int]:
-    return {"active_investigations": 8, "total_cases": 124, "evidence_records": 386, "unresolved_contradictions": 12, "active_hypotheses": 18}
+def dashboard_summary(db: Session = Depends(get_db)) -> dict[str, int]:
+    active_hypotheses = db.scalar(select(func.count()).select_from(Hypothesis).where(Hypothesis.status != "ARCHIVED")) or 0
+    unresolved = db.scalar(select(func.count()).select_from(Contradiction).where(
+        Contradiction.status.in_(["DETECTED", "UNDER_REVIEW", "REOPENED"])
+    )) or 0
+    pending_hypothesis_review = db.scalar(select(func.count()).select_from(HypothesisImpactRecord).where(
+        HypothesisImpactRecord.requires_review.is_(True)
+    )) or 0
+    return {
+        "active_investigations": 8, "total_cases": 124,
+        "evidence_records": db.scalar(select(func.count()).select_from(EvidenceRecord)) or 0,
+        "unresolved_contradictions": unresolved,
+        "active_hypotheses": active_hypotheses,
+        "hypotheses_requiring_review": pending_hypothesis_review,
+    }
 
 @app.get("/api/events", response_model=list[EventRead])
 def events(db: Session = Depends(get_db)) -> list[Event]:
@@ -262,6 +322,10 @@ def verify_timeline_event(event_id: str, verified: bool = True, db: Session = De
         raise HTTPException(status_code=404, detail="Reconstructed event not found")
     event.verification_status = "VERIFIED" if verified else "REJECTED"
     event.updated_at = datetime.now(timezone.utc)
+    analyze_source_change(
+        db, event.investigation_id, "RECONSTRUCTED_EVENT", event_id,
+        trigger="TIMELINE_EVENT_VERIFIED", include_unlinked=False,
+    )
     db.commit()
     return {"event_id": event_id, "verification_status": event.verification_status}
 
@@ -288,6 +352,10 @@ def correct_timeline_event(event_id: str, changes: EventCorrection, db: Session 
         previous_value=json.dumps(previous, default=str), new_value=json.dumps(update, default=str),
         changed_at=event.updated_at,
     ))
+    analyze_source_change(
+        db, event.investigation_id, "RECONSTRUCTED_EVENT", event_id,
+        trigger="TIMELINE_EVENT_CORRECTED", include_unlinked=False,
+    )
     db.commit()
     return event_to_dict(db, event)
 
@@ -297,7 +365,16 @@ def rebuild_case_graph(investigation_id: str, db: Session = Depends(get_db)) -> 
     if not any(item["investigation_id"] == investigation_id for item in INVESTIGATIONS):
         raise HTTPException(status_code=404, detail="Investigation not found")
     try:
-        return rebuild_graph(investigation_id, db)
+        result = rebuild_graph(investigation_id, db)
+        for relationship in db.scalars(select(GraphRelationship).where(
+            GraphRelationship.investigation_id == investigation_id
+        )).all():
+            analyze_source_change(
+                db, investigation_id, "GRAPH_RELATIONSHIP", relationship.relationship_id,
+                trigger="GRAPH_RELATIONSHIPS_REBUILT", include_unlinked=False,
+            )
+        db.commit()
+        return result
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail="Graph reconstruction failed") from exc
@@ -387,6 +464,10 @@ def review_graph_relationship(relationship_id: str, review: RelationshipReview, 
         new_status=review.verification_status, reviewer_note=review.reviewer_note,
         action_timestamp=relationship.updated_at,
     ))
+    analyze_source_change(
+        db, relationship.investigation_id, "GRAPH_RELATIONSHIP", relationship_id,
+        trigger="GRAPH_RELATIONSHIP_REVIEWED", include_unlinked=False,
+    )
     db.commit()
     return relationship_detail(db, relationship_id) or {}
 
@@ -396,7 +477,16 @@ def detect_investigation_contradictions(investigation_id: str, db: Session = Dep
     if not any(item["investigation_id"] == investigation_id for item in INVESTIGATIONS):
         raise HTTPException(status_code=404, detail="Investigation not found")
     try:
-        return detect_contradictions(investigation_id, db)
+        result = detect_contradictions(investigation_id, db)
+        for contradiction in db.scalars(select(Contradiction).where(
+            Contradiction.investigation_id == investigation_id
+        )).all():
+            analyze_source_change(
+                db, investigation_id, "CONTRADICTION", contradiction.contradiction_id,
+                trigger="CONTRADICTION_DETECTED", include_unlinked=False,
+            )
+        db.commit()
+        return result
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail="Contradiction detection failed") from exc
@@ -468,6 +558,10 @@ def review_contradiction(contradiction_id: str, review: ContradictionReviewReque
     item.status = review.action
     item.updated_at = datetime.now(timezone.utc)
     db.add(ContradictionReview(review_id=f"CR-{uuid.uuid4().hex[:16].upper()}", contradiction_id=contradiction_id, reviewer=review.reviewer, action=review.action, review_note=review.review_note, previous_status=previous, new_status=review.action, created_at=item.updated_at))
+    analyze_source_change(
+        db, item.investigation_id, "CONTRADICTION", contradiction_id,
+        trigger="CONTRADICTION_REVIEWED", include_unlinked=False,
+    )
     db.commit()
     return contradiction_dict(db, item)
 
@@ -480,3 +574,324 @@ def add_contradiction_note(contradiction_id: str, review: ContradictionReviewReq
     db.add(ContradictionReview(review_id=f"CR-{uuid.uuid4().hex[:16].upper()}", contradiction_id=contradiction_id, reviewer=review.reviewer, action="NOTE", review_note=review.review_note, previous_status=item.status, new_status=item.status, created_at=datetime.now(timezone.utc)))
     db.commit()
     return contradiction_dict(db, item)
+
+# ---------------------------------------------------------------------------
+# Milestone 6 · Hypothesis Intelligence Engine API
+# ---------------------------------------------------------------------------
+
+
+def _require_investigation(investigation_id: str) -> None:
+    if not any(item["investigation_id"] == investigation_id for item in INVESTIGATIONS):
+        raise HTTPException(status_code=404, detail="Investigation not found")
+
+
+def _get_hypothesis(db: Session, hypothesis_id: str) -> Hypothesis:
+    item = db.get(Hypothesis, hypothesis_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Hypothesis not found")
+    return item
+
+
+def _get_link(db: Session, link_id: str) -> HypothesisEvidenceLink:
+    item = db.get(HypothesisEvidenceLink, link_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Evidence link not found")
+    return item
+
+
+@app.post("/api/hypotheses/{investigation_id}", status_code=201, tags=["Hypotheses"],
+          summary="Create a competing hypothesis")
+def create_hypothesis(
+    investigation_id: str,
+    request: HypothesisCreate,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Create a hypothesis under an existing investigation. Titles must be unique
+    within the investigation (case-insensitive). Unknown categories may be supplied
+    as uppercase custom identifiers."""
+    item = create_hypothesis_service(db, investigation_id, request.model_dump())
+    db.commit()
+    db.refresh(item)
+    return hypothesis_dict(item)
+
+
+@app.get("/api/hypotheses/{investigation_id}", tags=["Hypotheses"],
+         summary="List hypotheses with filtering and pagination")
+def list_hypotheses(
+    investigation_id: str,
+    db: Session = Depends(get_db),
+    status: str | None = None,
+    category: str | None = None,
+    assessment: str | None = None,
+    search: str | None = None,
+    sort: str = "updated_at",
+    order: str = "desc",
+    page: int = 1,
+    page_size: int = 50,
+    include_archived: bool = True,
+) -> dict:
+    return list_hypotheses_service(
+        db, investigation_id, status=status, category=category, assessment=assessment,
+        search=search, sort=sort, order=order, page=page, page_size=page_size,
+        include_archived=include_archived,
+    )
+
+
+@app.get("/api/hypotheses/{investigation_id}/summary", tags=["Hypotheses"],
+         summary="Hypothesis Lab overview statistics")
+def hypothesis_summary(investigation_id: str, db: Session = Depends(get_db)) -> dict:
+    return investigation_summary(db, investigation_id)
+
+
+@app.get("/api/hypotheses/{investigation_id}/sources", tags=["Hypotheses"],
+         summary="Search existing investigation records available for linking")
+def hypothesis_source_catalog(
+    investigation_id: str,
+    db: Session = Depends(get_db),
+    source_type: str | None = None,
+    q: str | None = None,
+    hypothesis_id: str | None = None,
+    limit: int = 1000,
+) -> dict:
+    _require_investigation(investigation_id)
+    items = build_source_catalog(db, investigation_id, source_type=source_type, q=q, limit=min(max(limit, 1), 2000))
+    if hypothesis_id:
+        hypothesis = _get_hypothesis(db, hypothesis_id)
+        if hypothesis.investigation_id != investigation_id:
+            raise HTTPException(status_code=404, detail="Hypothesis not found in this investigation")
+        linked = {(link["source_type"], link["source_id"]) for link in list_links(db, hypothesis)}
+        for item in items:
+            item["already_linked"] = (item["source_type"], item["source_id"]) in linked
+    return {"investigation_id": investigation_id, "items": items, "total": len(items)}
+
+
+@app.patch("/api/hypotheses/{hypothesis_id}", tags=["Hypotheses"],
+           summary="Update hypothesis details")
+def update_hypothesis(
+    hypothesis_id: str,
+    request: HypothesisUpdate,
+    db: Session = Depends(get_db),
+) -> dict:
+    item = _get_hypothesis(db, hypothesis_id)
+    update_hypothesis_service(db, item, request.model_dump(exclude_none=True))
+    db.commit()
+    db.refresh(item)
+    return hypothesis_dict(item)
+
+
+@app.patch("/api/hypotheses/{hypothesis_id}/status", tags=["Hypotheses"],
+           summary="Record an investigator-controlled status decision")
+def update_hypothesis_status(
+    hypothesis_id: str,
+    request: HypothesisStatusUpdate,
+    db: Session = Depends(get_db),
+) -> dict:
+    item = _get_hypothesis(db, hypothesis_id)
+    update_status_service(db, item, request.status, request.explanation, request.updated_by)
+    db.commit()
+    db.refresh(item)
+    return hypothesis_dict(item)
+
+
+@app.delete("/api/hypotheses/{hypothesis_id}", tags=["Hypotheses"],
+            summary="Archive a hypothesis while retaining all history")
+def archive_hypothesis(
+    hypothesis_id: str,
+    db: Session = Depends(get_db),
+    reason: str = "",
+    archived_by: str = "investigator",
+) -> dict:
+    item = _get_hypothesis(db, hypothesis_id)
+    archive_hypothesis_service(db, item, actor=archived_by, reason=reason)
+    db.commit()
+    db.refresh(item)
+    return hypothesis_dict(item)
+
+
+@app.post("/api/hypotheses/{hypothesis_id}/evidence", status_code=201, tags=["Hypotheses"],
+          summary="Link an existing investigation source to a hypothesis")
+def link_hypothesis_evidence(
+    hypothesis_id: str,
+    request: HypothesisEvidenceCreate,
+    db: Session = Depends(get_db),
+) -> dict:
+    hypothesis = _get_hypothesis(db, hypothesis_id)
+    link = link_evidence(db, hypothesis, request.model_dump())
+    db.commit()
+    db.refresh(link)
+    return link_dict(link)
+
+
+@app.get("/api/hypotheses/{hypothesis_id}/evidence", tags=["Hypotheses"],
+         summary="List linked sources for a hypothesis")
+def list_hypothesis_evidence(
+    hypothesis_id: str,
+    db: Session = Depends(get_db),
+    classification: str | None = None,
+    review_status: str | None = None,
+    source_type: str | None = None,
+    include_withdrawn: bool = True,
+) -> list[dict]:
+    hypothesis = _get_hypothesis(db, hypothesis_id)
+    return list_links(
+        db, hypothesis, classification=classification, review_status=review_status,
+        source_type=source_type, include_withdrawn=include_withdrawn,
+    )
+
+
+@app.patch("/api/hypotheses/evidence/{link_id}", tags=["Hypotheses"],
+           summary="Change classification, strength, reliability, or review status")
+def update_hypothesis_evidence(
+    link_id: str,
+    request: HypothesisEvidenceUpdate,
+    db: Session = Depends(get_db),
+) -> dict:
+    link = _get_link(db, link_id)
+    hypothesis = _get_hypothesis(db, link.hypothesis_id)
+    update_link(db, link, hypothesis, request.model_dump(exclude_none=True))
+    db.commit()
+    db.refresh(link)
+    return link_dict(link)
+
+
+@app.delete("/api/hypotheses/evidence/{link_id}", tags=["Hypotheses"],
+            summary="Withdraw an evidence link while preserving its audit history")
+def withdraw_hypothesis_evidence(
+    link_id: str,
+    db: Session = Depends(get_db),
+    withdrawn_by: str = "investigator",
+) -> dict:
+    link = _get_link(db, link_id)
+    hypothesis = _get_hypothesis(db, link.hypothesis_id)
+    withdraw_link(db, link, hypothesis, actor=withdrawn_by)
+    db.commit()
+    db.refresh(link)
+    return link_dict(link)
+
+
+@app.post("/api/hypotheses/{hypothesis_id}/evaluate", tags=["Hypotheses"],
+          summary="Re-evaluate one hypothesis and store an assessment snapshot")
+def evaluate_one_hypothesis(hypothesis_id: str, db: Session = Depends(get_db)) -> dict:
+    hypothesis = _get_hypothesis(db, hypothesis_id)
+    assessment = evaluate_hypothesis_service(db, hypothesis)
+    db.commit()
+    return assessment_dict(assessment)
+
+
+@app.post("/api/hypotheses/evaluate/{investigation_id}", tags=["Hypotheses"],
+          summary="Evaluate all active hypotheses in an investigation")
+def evaluate_investigation_hypotheses(investigation_id: str, db: Session = Depends(get_db)) -> dict:
+    _require_investigation(investigation_id)
+    result = evaluate_all_hypotheses(db, investigation_id)
+    db.commit()
+    return result
+
+
+@app.get("/api/hypotheses/{hypothesis_id}/assessment", tags=["Hypotheses"],
+         summary="Retrieve the latest stored assessment")
+def hypothesis_assessment(hypothesis_id: str, db: Session = Depends(get_db)) -> dict:
+    hypothesis = _get_hypothesis(db, hypothesis_id)
+    assessment = latest_hypothesis_assessment(db, hypothesis.id)
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Hypothesis has not been evaluated")
+    return assessment_dict(assessment)
+
+
+@app.get("/api/hypotheses/{hypothesis_id}/assessments", tags=["Hypotheses"],
+         summary="Retrieve the append-only assessment history")
+def hypothesis_assessment_history(hypothesis_id: str, db: Session = Depends(get_db)) -> list[dict]:
+    hypothesis = _get_hypothesis(db, hypothesis_id)
+    history = hypothesis_history_service(db, hypothesis)["assessments"]
+    return history
+
+
+@app.post("/api/hypotheses/{investigation_id}/compare", tags=["Hypotheses"],
+          summary="Compare two or more competing hypotheses")
+def compare_hypotheses(investigation_id: str, request: HypothesisCompareRequest, db: Session = Depends(get_db)) -> dict:
+    return compare_hypotheses_service(db, investigation_id, request.hypothesis_ids)
+
+
+@app.get("/api/hypotheses/{identifier}/impact", tags=["Hypotheses"],
+         summary="Retrieve evidence impact records for an investigation or hypothesis")
+def hypothesis_impact_records(
+    identifier: str,
+    db: Session = Depends(get_db),
+    category: str | None = None,
+    reviewed: bool | None = None,
+    page: int = 1,
+    page_size: int = 50,
+) -> dict:
+    if identifier.startswith("HYP-"):
+        hypothesis = _get_hypothesis(db, identifier)
+        return list_impacts(
+            db, hypothesis_id=hypothesis.id, category=category, reviewed=reviewed,
+            page=page, page_size=page_size,
+        )
+    _require_investigation(identifier)
+    return list_impacts(
+        db, investigation_id=identifier, category=category, reviewed=reviewed,
+        page=page, page_size=page_size,
+    )
+
+
+@app.post("/api/hypotheses/{hypothesis_id}/impact/{impact_id}/review", tags=["Hypotheses"],
+          summary="Record investigator review of an impact analysis item")
+def review_hypothesis_impact(
+    hypothesis_id: str,
+    impact_id: str,
+    request: ImpactReviewRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    hypothesis = _get_hypothesis(db, hypothesis_id)
+    item = review_impact(db, hypothesis, impact_id, request.reviewed_by, request.explanation)
+    db.commit()
+    db.refresh(item)
+    return impact_dict(item)
+
+
+@app.get("/api/hypotheses/{hypothesis_id}/history", tags=["Hypotheses"],
+         summary="Retrieve hypothesis versions, review actions, and assessments")
+def hypothesis_history(hypothesis_id: str, db: Session = Depends(get_db)) -> dict:
+    hypothesis = _get_hypothesis(db, hypothesis_id)
+    return hypothesis_history_service(db, hypothesis)
+
+
+@app.get("/api/hypotheses/{hypothesis_id}/versions/{version_number}", tags=["Hypotheses"],
+         summary="Retrieve one historical hypothesis version")
+def hypothesis_version(hypothesis_id: str, version_number: int, db: Session = Depends(get_db)) -> dict:
+    hypothesis = _get_hypothesis(db, hypothesis_id)
+    item = version_detail(db, hypothesis.id, version_number)
+    if not item:
+        raise HTTPException(status_code=404, detail="Hypothesis version not found")
+    return version_dict(item)
+
+
+@app.post("/api/hypotheses/{hypothesis_id}/notes", status_code=201, tags=["Hypotheses"],
+          summary="Add an investigator note to a hypothesis")
+def add_hypothesis_note(
+    hypothesis_id: str,
+    request: HypothesisNoteCreate,
+    db: Session = Depends(get_db),
+) -> dict:
+    hypothesis = _get_hypothesis(db, hypothesis_id)
+    item = add_note(db, hypothesis, request.note, request.created_by)
+    db.commit()
+    db.refresh(item)
+    return note_dict(item)
+
+
+@app.get("/api/hypotheses/{hypothesis_id}/notes", tags=["Hypotheses"],
+         summary="Retrieve investigator notes")
+def list_hypothesis_notes(hypothesis_id: str, db: Session = Depends(get_db)) -> list[dict]:
+    hypothesis = _get_hypothesis(db, hypothesis_id)
+    return list_notes(db, hypothesis)
+
+
+@app.get("/api/hypotheses/{investigation_id}/{hypothesis_id}", tags=["Hypotheses"],
+         summary="Retrieve hypothesis detail with evidence, assessment, and review counts")
+def hypothesis_detail(investigation_id: str, hypothesis_id: str, db: Session = Depends(get_db)) -> dict:
+    _require_investigation(investigation_id)
+    hypothesis = _get_hypothesis(db, hypothesis_id)
+    if hypothesis.investigation_id != investigation_id:
+        raise HTTPException(status_code=404, detail="Hypothesis not found")
+    return hypothesis_detail_service(db, hypothesis)

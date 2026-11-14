@@ -1,0 +1,16 @@
+{
+  "records": [
+    {"person_id": "P101", "contact_person_id": "P102", "contact_date": "2024-06-02", "visit_date": "2024-06-02", "event_date": "2024-06-02", "location_id": "LOC-01", "sample_id": "S-ORION-77", "laboratory_result": "positive", "description": "Index case attended the shared gathering at North Quay depot and reported household contact."},
+    {"person_id": "P102", "contact_person_id": "P101", "contact_date": "2024-06-03", "visit_date": "2024-06-03", "event_date": "2024-06-03", "location_id": "LOC-01", "sample_id": "S-ORION-78", "laboratory_result": "positive", "description": "Household contact with the index case after the depot gathering."},
+    {"person_id": "P103", "visit_date": "2024-06-04", "event_date": "2024-06-04", "location_id": "LOC-02", "description": "Reported a visit to the North Quay depot in the first interview."},
+    {"person_id": "P103", "visit_date": "2024-06-06", "event_date": "2024-06-06", "location_id": "LOC-03", "description": "Follow-up interview reports a different date and a different location."},
+    {"person_id": "P104", "event_date": "2024-06-05", "location_id": "LOC-02", "sample_id": "S-ORION-77", "laboratory_result": "negative", "description": "Laboratory accession duplicates the index sample identifier with a conflicting result."},
+    {"person_id": "P105", "event_date": "06/06/2024", "location_id": "LOC-01", "description": "Delayed sentinel-site report with an ambiguous source date."},
+    {"person_id": "P106", "collection_date": "2024-06-08", "confirmation_date": "2024-06-07", "event_date": "2024-06-08", "location_id": "LOC-03", "description": "Confirmation is recorded before the specimen collection date."},
+    {"person_id": "P107", "visit_date": "2024-06-08", "event_date": "2024-06-08", "location_id": "LOC-04", "description": "Independent exposure reported at the East Ridge market."},
+    {"person_id": "P108", "visit_date": "2024-06-09", "event_date": "2024-06-09", "location_id": "LOC-04", "description": "Second independent exposure reported at the East Ridge market."},
+    {"person_id": "P109", "visit_date": "2024-06-10", "event_date": "2024-06-10", "location_id": "LOC-01", "description": "North Quay depot visit with incomplete contact details."},
+    {"person_id": "P110", "visit_date": "2024-06-11", "event_date": "2024-06-11", "location_id": "LOC-02", "description": "Depot visit reported after the recorded symptom onset; timing requires review."},
+    {"person_id": "P111", "event_date": "2024-06-12", "location_id": "LOC-02", "sample_id": "S-ORION-99", "laboratory_result": "positive", "description": "Additional confirmed case linked to the North Quay depot."}
+  ]
+}

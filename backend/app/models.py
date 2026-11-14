@@ -249,3 +249,129 @@ Index("uq_graph_node_entity", GraphNode.investigation_id, GraphNode.node_type, G
 Index("uq_graph_relationship_pair", GraphRelationship.investigation_id, GraphRelationship.source_node_id, GraphRelationship.target_node_id, GraphRelationship.relationship_type, unique=True)
 Index("uq_relationship_source", RelationshipSource.relationship_id, RelationshipSource.evidence_id, RelationshipSource.reconstructed_event_id, RelationshipSource.extracted_record_id, unique=True)
 Index("uq_contradiction_identity", Contradiction.investigation_id, Contradiction.contradiction_type, Contradiction.affected_entity_id, Contradiction.affected_event_id, Contradiction.detection_rule, unique=True)
+
+
+class Hypothesis(Base):
+    __tablename__ = "hypotheses"
+    id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    investigation_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(180), nullable=False)
+    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    detailed_explanation: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    assumptions: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    predictions: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    limitations: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    open_questions: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="DRAFT", index=True)
+    current_assessment: Mapped[str] = mapped_column(String(64), nullable=False, default="NOT_YET_EVALUATED")
+    current_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class HypothesisEvidenceLink(Base):
+    __tablename__ = "hypothesis_evidence_links"
+    id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    hypothesis_id: Mapped[str] = mapped_column(ForeignKey("hypotheses.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    source_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    source_title: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    source_snapshot: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    classification: Mapped[str] = mapped_column(String(16), nullable=False)
+    explanation: Mapped[str] = mapped_column(Text, nullable=False)
+    relevant_observations: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    evidence_strength: Mapped[str] = mapped_column(String(16), nullable=False, default="NOT_ASSESSED")
+    source_reliability: Mapped[str] = mapped_column(String(16), nullable=False, default="NOT_ASSESSED")
+    strength_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    reliability_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    review_status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING_REVIEW")
+    investigator_notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    linked_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    reviewed_by: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class HypothesisAssessment(Base):
+    __tablename__ = "hypothesis_assessments"
+    id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    hypothesis_id: Mapped[str] = mapped_column(ForeignKey("hypotheses.id", ondelete="CASCADE"), nullable=False, index=True)
+    assessment_label: Mapped[str] = mapped_column(String(64), nullable=False)
+    assessment_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    supporting_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    contradicting_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    neutral_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    contextual_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    verified_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    pending_review_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    strong_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    moderate_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    limited_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unresolved_contradiction_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    missing_information: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    assessment_details: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    evaluation_rule_version: Mapped[str] = mapped_column(String(32), nullable=False, default="6.1")
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class HypothesisVersion(Base):
+    __tablename__ = "hypothesis_versions"
+    id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    hypothesis_id: Mapped[str] = mapped_column(ForeignKey("hypotheses.id", ondelete="CASCADE"), nullable=False, index=True)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    snapshot_data: Mapped[str] = mapped_column(Text, nullable=False)
+    previous_data: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    change_description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    changed_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class HypothesisImpactRecord(Base):
+    __tablename__ = "hypothesis_impact_records"
+    id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    hypothesis_id: Mapped[str] = mapped_column(ForeignKey("hypotheses.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    source_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    impact_category: Mapped[str] = mapped_column(String(32), nullable=False)
+    previous_assessment: Mapped[str] = mapped_column(String(64), nullable=False)
+    current_assessment: Mapped[str] = mapped_column(String(64), nullable=False)
+    explanation: Mapped[str] = mapped_column(Text, nullable=False)
+    trigger: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    requires_review: Mapped[bool] = mapped_column(nullable=False, default=True)
+    reviewed: Mapped[bool] = mapped_column(nullable=False, default=False)
+    reviewed_by: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class HypothesisNote(Base):
+    __tablename__ = "hypothesis_notes"
+    id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    hypothesis_id: Mapped[str] = mapped_column(ForeignKey("hypotheses.id", ondelete="CASCADE"), nullable=False, index=True)
+    note: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class HypothesisReviewHistory(Base):
+    __tablename__ = "hypothesis_review_history"
+    id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    hypothesis_id: Mapped[str] = mapped_column(ForeignKey("hypotheses.id", ondelete="CASCADE"), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(40), nullable=False)
+    previous_value: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    new_value: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    explanation: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    performed_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+Index("uq_hypothesis_title", Hypothesis.investigation_id, Hypothesis.title, unique=True)
+Index("uq_hypothesis_source", HypothesisEvidenceLink.hypothesis_id, HypothesisEvidenceLink.source_type, HypothesisEvidenceLink.source_id, unique=True)
+Index("uq_hypothesis_version", HypothesisVersion.hypothesis_id, HypothesisVersion.version_number, unique=True)

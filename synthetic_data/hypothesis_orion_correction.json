@@ -1,0 +1,5 @@
+{
+  "records": [
+    {"person_id": "P101", "contact_person_id": "P102", "contact_date": "2024-06-02", "visit_date": "2024-06-02", "event_date": "2024-06-02", "location_id": "LOC-01", "sample_id": "S-ORION-77", "laboratory_result": "positive", "description": "Corrected source document confirms the North Quay depot visit and the household contact on the same date."}
+  ]
+}

@@ -15,3 +15,5 @@ backend/.env
 .pytest_cache/
 backend/.pytest_cache/
 evidence_storage/
+
+*.log

@@ -1,4 +1,4 @@
-# Outbreak Rewind · Milestone 3
+# Outbreak Rewind · Milestone 6
 
 Outbreak Rewind is a synthetic public-health investigation console for reconstructing evidence timelines, case relationships, contradictions, and competing hypotheses. **Project Orion contains fictional data only; it is not a clinical or epidemiological decision system.**
 
@@ -162,3 +162,36 @@ when new evidence changes an existing conflict.
 The Contradiction Intelligence Center uses live backend data with severity filters, detection
 controls, side-by-side comparisons, provenance, explanations, and investigator review actions.
 The schema is managed by Alembic revision `0003_contradictions`.
+
+## Milestone 6 · Hypothesis management and evaluation
+
+Milestone 6 adds investigator-controlled hypotheses and qualitative evidence evaluation. Create,
+edit, archive, version, annotate, and manually status hypotheses with
+`POST /api/hypotheses/{investigation_id}`, `PATCH /api/hypotheses/{hypothesis_id}`, and
+`PATCH /api/hypotheses/{hypothesis_id}/status`. Existing evidence documents, extracted records,
+timeline events, graph relationships, contradictions, and temporal findings can be linked through
+`/api/hypotheses/{hypothesis_id}/evidence`. Duplicate source links are rejected and withdrawn links
+remain in history.
+
+`POST /api/hypotheses/{hypothesis_id}/evaluate` stores a reproducible qualitative assessment;
+`POST /api/hypotheses/{investigation_id}/compare` compares competing hypotheses without selecting
+a winner. Labels are derived from reviewed/verified supporting and contradicting records, while
+strength and reliability remain independent qualitative categories—no probabilities are produced.
+Every evaluation is retained, and linking or changing evidence creates an investigator-reviewable
+impact record. Assessment history, versions, notes, and impacts are available under the documented
+`/api/hypotheses` routes. The schema is managed by Alembic revisions `0004_hypotheses` and
+`0005_hypothesis_intelligence`; the latter is additive and retains existing Milestone 1–6 rows.
+
+The Hypothesis Lab frontend provides routed overview, detail, comparison, evidence, assessment,
+impact, and history views. It is reachable from the sidebar or at `/hypotheses`. The synthetic
+ORION scenario can be loaded after the API is running:
+
+```powershell
+cd backend
+python scripts/seed_hypothesis_scenarios.py
+```
+
+Run backend tests with `python -m pytest backend/tests -q` from the project root and frontend
+tests with `npm test`. Assessments are qualitative and rule-based (engine rule version v6.2);
+strength and source reliability are independent investigator judgements, and the system never
+selects a winning hypothesis or produces a probability.
