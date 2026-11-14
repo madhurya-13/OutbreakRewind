@@ -15,6 +15,17 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property
+    def allowed_origins(self) -> list[str]:
+        """Return configured origins, accepting both localhost and 127.0.0.1."""
+        origins = [origin.strip() for origin in self.frontend_origin.split(",") if origin.strip()]
+        for origin in list(origins):
+            if "localhost" in origin:
+                origins.append(origin.replace("localhost", "127.0.0.1"))
+            elif "127.0.0.1" in origin:
+                origins.append(origin.replace("127.0.0.1", "localhost"))
+        return list(dict.fromkeys(origins))
+
+    @property
     def storage_dir_path(self) -> Path:
         return Path(self.storage_dir).resolve()
 

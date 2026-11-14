@@ -1,0 +1,3 @@
+/* Tailwind utilities without preflight, so the existing console styles stay intact. */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);

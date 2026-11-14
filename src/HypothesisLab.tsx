@@ -16,7 +16,7 @@ import {
   validateHypothesisForm, writeInvestigation, type HypothesisForm,
 } from './hypothesisUtils'
 
-export const CHART_COLORS = ['#4dc7d7', '#e36b65', '#e7c86e', '#8495ec', '#70c48b']
+export const CHART_COLORS = ['#ff6a58', '#7bc9bd', '#e9bd6a', '#b98f7a', '#d8d1bf']
 
 export function useInvestigations() {
   const [items, setItems] = useState<Investigation[]>([])

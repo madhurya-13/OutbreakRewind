@@ -51,6 +51,42 @@ npm run dev
 
 The dashboard is available at `http://localhost:5173`.
 
+### UI structure (shadcn + Tailwind)
+
+This is a Vite app with its source in `src/`, so the component default is
+`src/components/ui`, not a root-level `/components/ui` folder. The `@/*` alias
+maps `@/components/ui` to `src/components/ui`, and `components.json` records that
+alias for the shadcn CLI. Keeping the folder under `src/` matters: Vite only serves
+files inside the project source tree, and TypeScript's `include: ["src"]` only
+checks those files. A root-level `components/ui` folder would build but would not
+be picked up by the configured aliases or the Vite dependency graph.
+
+Tailwind CSS v4 is installed with `@tailwindcss/vite`; global utilities load from
+`src/tailwind.css` without preflight so the existing investigation-console CSS is
+not reset. Global design tokens and the original console styles live in
+`src/styles.css`, the Hypothesis Lab in `src/hypothesis.css`, and the specimen
+dashboard in `src/dashboard.css`.
+
+If you prefer to let the CLI manage a component in a fresh checkout, the project
+is already initialized for it:
+
+```powershell
+npx shadcn@latest add button
+```
+
+For a brand-new Vite + React + TypeScript project, the equivalent setup is:
+
+```powershell
+npm create vite@latest my-app -- --template react-ts
+cd my-app
+npm install tailwindcss @tailwindcss/vite clsx tailwind-merge
+npx shadcn@latest init
+```
+
+Add `tailwindcss()` to the Vite plugin list, map `@` to `./src` in both
+`vite.config.ts` and `tsconfig.app.json`, then add the shadcn aliases
+(`@/components`, `@/components/ui`, `@/lib/utils`) to `components.json`.
+
 ## API smoke tests
 
 ```powershell

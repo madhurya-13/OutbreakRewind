@@ -476,7 +476,7 @@ function LinkCard({ link, onEdit, onWithdraw, onRestore, busy }: {
 }
 
 function ChartCard({ title, data, dataKeys, colors }: { title: string; data: any[]; dataKeys: string[]; colors: string[] }) {
-  return <div className="h-chart-card"><h3>{title}</h3>{data.length ? <ResponsiveContainer width="100%" height={230}><BarChart data={data}><CartesianGrid stroke="#243449" strokeDasharray="3 3"/><XAxis dataKey="name" stroke="#71839a" tick={{ fontSize: 10 }}/><YAxis allowDecimals={false} stroke="#71839a"/><Tooltip contentStyle={{ background: '#101b2b', border: '1px solid #2e435c' }}/>{dataKeys.length > 1 && <Legend/>}{dataKeys.map((key, index) => <Bar key={key} dataKey={key} fill={colors[index % colors.length]} radius={[2, 2, 0, 0]}/>)}</BarChart></ResponsiveContainer> : <p className="h-muted">No data recorded.</p>}</div>
+  return <div className="h-chart-card"><h3>{title}</h3>{data.length ? <ResponsiveContainer width="100%" height={230}><BarChart data={data}><CartesianGrid stroke="#2c2720" strokeDasharray="3 3"/><XAxis dataKey="name" stroke="#7c7464" tick={{ fontSize: 10 }}/><YAxis allowDecimals={false} stroke="#7c7464"/><Tooltip contentStyle={{ background: '#12100d', border: '1px solid #3b342b' }}/>{dataKeys.length > 1 && <Legend/>}{dataKeys.map((key, index) => <Bar key={key} dataKey={key} fill={colors[index % colors.length]} radius={[2, 2, 0, 0]}/>)}</BarChart></ResponsiveContainer> : <p className="h-muted">No data recorded.</p>}</div>
 }
 
 function AssessmentTab({ assessment, assessments, onEvaluate, busy }: {
@@ -495,9 +495,9 @@ function AssessmentTab({ assessment, assessments, onEvaluate, busy }: {
     </div>
     <div className="h-mini-metrics wide"><span><b>{assessment.supporting_count}</b> supporting</span><span><b>{assessment.contradicting_count}</b> contradicting</span><span><b>{assessment.neutral_count}</b> neutral</span><span><b>{assessment.contextual_count}</b> contextual</span><span><b>{assessment.verified_count}</b> verified</span><span><b>{assessment.pending_review_count}</b> pending</span><span><b>{assessment.unresolved_contradiction_count}</b> unresolved</span></div>
     <div className="h-chart-grid">
-      <ChartCard title="Evidence relationship counts" data={evidenceChartData(assessment)} dataKeys={['count']} colors={['#4dc7d7']}/>
-      <ChartCard title="Evidence strength distribution" data={strengths} dataKeys={['count']} colors={['#8495ec']}/>
-      <ChartCard title="Source reliability distribution" data={reliability} dataKeys={['count']} colors={['#70c48b']}/>
+      <ChartCard title="Evidence relationship counts" data={evidenceChartData(assessment)} dataKeys={['count']} colors={['#ff6a58']}/>
+      <ChartCard title="Evidence strength distribution" data={strengths} dataKeys={['count']} colors={['#b98f7a']}/>
+      <ChartCard title="Source reliability distribution" data={reliability} dataKeys={['count']} colors={['#7bc9bd']}/>
     </div>
     {explanation && <Panel title="Why this assessment?"><p>{explanation.why}</p><p className="h-muted"><b>Rule decision:</b> {explanation.decision_reason}</p><div className="h-rule-table"><div className="h-rule-row head"><span>Rule</span><span>Result</span><span>Reason</span></div>{(explanation.rules_applied ?? []).map(item => <div className="h-rule-row" key={item.rule}><span>{humanize(item.rule)}</span><span>{item.result ? 'Applied' : 'Not applied'}</span><span>{item.because}</span></div>)}</div></Panel>}
     <div className="h-two-col">
@@ -640,8 +640,8 @@ export function HypothesisComparisonPage() {
         {entry.notes[0] && <p className="h-muted small">Latest note: {entry.notes[0].note}</p>}
       </div>)}</div>
       <div className="h-chart-grid two">
-        <ChartCard title="Supporting versus contradicting evidence" data={chartData} dataKeys={['Supporting', 'Contradicting', 'Neutral', 'Contextual']} colors={['#70c48b', '#e36b65', '#e7c86e', '#8495ec']}/>
-        <ChartCard title="Evidence strength distribution" data={strengthData} dataKeys={['Strong', 'Moderate', 'Limited', 'Not assessed']} colors={['#4dc7d7', '#8495ec', '#e7c86e', '#71839a']}/>
+        <ChartCard title="Supporting versus contradicting evidence" data={chartData} dataKeys={['Supporting', 'Contradicting', 'Neutral', 'Contextual']} colors={['#7bc9bd', '#ff6a58', '#e9bd6a', '#b98f7a']}/>
+        <ChartCard title="Evidence strength distribution" data={strengthData} dataKeys={['Strong', 'Moderate', 'Limited', 'Not assessed']} colors={['#ff6a58', '#b98f7a', '#e9bd6a', '#7c7464']}/>
       </div>
       <Panel title="Comparison matrix"><div className="h-matrix-wrap"><table className="h-matrix"><thead><tr><th>Dimension</th>{comparison.hypotheses.map(entry => <th key={entry.hypothesis.hypothesis_id}>{entry.hypothesis.title}</th>)}</tr></thead><tbody>{comparison.comparison_matrix.map(row => <tr key={row.key}><td>{row.label}</td>{row.cells.map((cell, index) => <td key={`${row.key}-${index}`}>{row.key === 'assessment' ? <Badge tone={assessmentTone(String(cell.value))}>{cell.display}</Badge> : cell.display}</td>)}</tr>)}</tbody></table></div></Panel>
       <Panel title="Comparison insights"><ul className="h-insight-list">{comparison.insights.map(insight => <li key={insight}><Check size={14}/>{insight}</li>)}</ul><p className="h-caution"><ShieldAlert size={14}/>{comparison.disclaimer}</p></Panel>

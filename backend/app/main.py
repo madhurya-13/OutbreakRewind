@@ -55,7 +55,7 @@ from .intelligence.hypothesis.serializers import hypothesis_dict as _hypothesis_
 from .intelligence.hypothesis.serializers import now as hypothesis_now
 
 app = FastAPI(title="Outbreak Rewind API", version="0.1.0")
-app.add_middleware(CORSMiddleware, allow_origins=[settings.frontend_origin], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=settings.allowed_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 SEED = [
     ("EV-042", date(2024, 6, 18), "Port Meridian transmission spike", "Port Meridian, OR", "critical", "Epidemiology", "Wastewater sampling exceeds alert threshold for the third consecutive day.", "ORION / NW-7"),
