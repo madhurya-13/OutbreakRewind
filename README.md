@@ -371,7 +371,7 @@ use the authorized export endpoint rather than exposing arbitrary files.
 | GET | `/api/rewind/{id}/snapshots` | List snapshots. |
 | GET | `/api/rewind/{id}/snapshots/{snapshot_id}` | Snapshot metadata and contents. |
 | GET | `/api/rewind/{id}/snapshots/{snapshot_id}/integrity` | Run all integrity checks. |
-| GET | `/api/rewind/{id}/at?as_of=...` | Full point-in-time reconstruction. |
+| GET | `/api/rewind/{id}/at?as_of=...` | Full point-in-time reconstruction. Add `compact=true` for the UI projection without bulky temporal-relationship, record, and nested provenance collections. |
 | GET | `/api/rewind/{id}/at/{timestamp}/summary` | Historical summary. |
 | GET | `/api/rewind/{id}/at/{timestamp}/timeline` | Historical timeline. |
 | GET | `/api/rewind/{id}/at/{timestamp}/network` | Historical network. |
@@ -390,17 +390,19 @@ use the authorized export endpoint rather than exposing arbitrary files.
 
 ### Database migration
 
-The additive migration is `0006_investigation_rewind`; it depends on
-`0005_hypothesis_intelligence` and uses guarded table/index creation so an existing SQLite database
-whose tables were created by the application startup is adopted without data loss. Run it from the
-repository root:
+The Milestone 7 migrations are `0006_investigation_rewind` and
+`0007_contradiction_priority`. The first uses guarded table/index creation so an existing SQLite
+database whose tables were created by the application startup is adopted without data loss. The
+second widens `contradictions.machine_priority` to `TEXT`, because existing ORION values exceed the
+original `VARCHAR(24)` limit that SQLite enforced only loosely. Run them from the repository root:
 
 ```powershell
 cd backend
 ..\.venv\Scripts\python.exe -m alembic upgrade head
 ```
 
-For PostgreSQL, run `docker compose up -d db` first and set `DATABASE_URL` as described in Setup.
+For PostgreSQL, set `DATABASE_URL` as described in Setup; Alembic reads it directly, and the same
+`upgrade head` command applies both migrations from an empty database.
 
 ### Project ORION walkthrough
 

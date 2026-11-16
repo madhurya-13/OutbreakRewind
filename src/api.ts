@@ -471,7 +471,7 @@ export type RewindExport = { export_id: string; export_type: string; cutoff_time
 
 export const fetchRewindHistory = (investigationId: string, params = '') => get<{ items: RewindHistoryEvent[]; total: number; page: number; page_size: number }>(`/api/rewind/${investigationId}/history${params}`)
 export const fetchRewindHistoryFilters = (investigationId: string) => get<{ event_types: string[]; modules: string[]; actors: string[]; entity_types: string[] }>(`/api/rewind/${investigationId}/history/filters`)
-export const fetchRewindAt = (investigationId: string, asOf: string) => get<RewindState>(`/api/rewind/${investigationId}/at?as_of=${encodeURIComponent(asOf)}`)
+export const fetchRewindAt = (investigationId: string, asOf: string) => get<RewindState>(`/api/rewind/${investigationId}/at?as_of=${encodeURIComponent(asOf)}&compact=true`)
 export const fetchRewindCoverage = (investigationId: string, asOf = '') => get<RewindCoverage>(`/api/rewind/${investigationId}/coverage${asOf ? `?as_of=${encodeURIComponent(asOf)}` : ''}`)
 export const fetchRewindSnapshots = (investigationId: string) => get<RewindSnapshot[]>(`/api/rewind/${investigationId}/snapshots`)
 export const createRewindSnapshot = (investigationId: string, body: Record<string, unknown>) => request<RewindSnapshot>(`/api/rewind/${investigationId}/snapshots`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })

@@ -56,16 +56,39 @@ def _require_investigation(investigation_id: str) -> None:
         raise HTTPException(status_code=404, detail="Investigation not found")
 
 
-def _reconstruct(investigation_id: str, as_of: str, db: Session) -> dict:
+def _reconstruct(investigation_id: str, as_of: str, db: Session, compact: bool = False) -> dict:
     _require_investigation(investigation_id)
     try:
-        state = reconstruct_investigation_as_of(investigation_id, as_of, db)
+        state = reconstruct_investigation_as_of(investigation_id, as_of, db, compact=compact)
         # The UI and history endpoint retrieve the paginated event stream separately. Avoid
         # sending the entire investigation history inside every point-in-time response.
         state.pop("history", None)
         return state
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _compact_state(state: dict) -> dict:
+    """Return the UI projection without bulky provenance collections.
+
+    The complete reconstruction remains available from the default endpoint, snapshots, reports,
+    and comparisons. This projection keeps every field the Rewind viewer renders while omitting
+    the temporal relationship matrix, extracted-record payloads, and nested evidence/review rows.
+    """
+    state["records"] = []
+    state["timeline"]["relationships"] = []
+    for event in state["timeline"].get("events") or []:
+        event.pop("audit_history", None)
+    for relationship in state["network"].get("relationships") or []:
+        relationship.pop("sources", None)
+    for contradiction in state.get("contradictions") or []:
+        contradiction.pop("comparisons", None)
+        contradiction.pop("evidence", None)
+        contradiction.pop("reviews", None)
+    for hypothesis in state.get("hypotheses") or []:
+        hypothesis.pop("notes", None)
+        hypothesis.pop("review_history", None)
+    return state
 
 
 @router.get("/{investigation_id}/history")
@@ -170,8 +193,9 @@ def get_snapshot_integrity(investigation_id: str, snapshot_id: str, db: Session 
 
 
 @router.get("/{investigation_id}/at")
-def at_timestamp(investigation_id: str, as_of: str, db: Session = Depends(get_db)) -> dict:
-    return _reconstruct(investigation_id, as_of, db)
+def at_timestamp(investigation_id: str, as_of: str, compact: bool = False, db: Session = Depends(get_db)) -> dict:
+    state = _reconstruct(investigation_id, as_of, db, compact=compact)
+    return _compact_state(state) if compact else state
 
 
 @router.get("/{investigation_id}/at/{timestamp}/summary")

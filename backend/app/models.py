@@ -178,7 +178,7 @@ class Contradiction(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     severity: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
-    machine_priority: Mapped[str] = mapped_column(String(24), nullable=False)
+    machine_priority: Mapped[str] = mapped_column(Text, nullable=False)
     investigator_priority: Mapped[str | None] = mapped_column(String(24), nullable=True)
     affected_entity_type: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     affected_entity_id: Mapped[str | None] = mapped_column(String(96), nullable=True, index=True)

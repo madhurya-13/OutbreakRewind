@@ -33,11 +33,8 @@ def _require_investigation(investigation_id: str) -> None:
         raise ValueError("Investigation not found")
 
 
-def _versions(db: Session, investigation_id: str, cutoff: datetime) -> dict[tuple[str, str], dict[str, Any]]:
+def _versions(cutoff: datetime, rows: list[HistoricalEntityVersion]) -> dict[tuple[str, str], dict[str, Any]]:
     result: dict[tuple[str, str], dict[str, Any]] = {}
-    rows = db.scalars(select(HistoricalEntityVersion).where(
-        HistoricalEntityVersion.investigation_id == investigation_id
-    ).order_by(HistoricalEntityVersion.version_number.asc())).all()
     for row in rows:
         if within(row.recorded_at, cutoff):
             result[(row.entity_type, row.entity_id)] = {
@@ -47,11 +44,17 @@ def _versions(db: Session, investigation_id: str, cutoff: datetime) -> dict[tupl
     return result
 
 
-def _coverage(db: Session, investigation_id: str, cutoff: datetime) -> dict[str, Any]:
-    history = list(db.scalars(select(InvestigationHistoryEvent).where(
+def _coverage(
+    db: Session,
+    investigation_id: str,
+    cutoff: datetime,
+    history_rows: list[InvestigationHistoryEvent] | None = None,
+    version_rows: list[HistoricalEntityVersion] | None = None,
+) -> dict[str, Any]:
+    history = history_rows if history_rows is not None else list(db.scalars(select(InvestigationHistoryEvent).where(
         InvestigationHistoryEvent.investigation_id == investigation_id
     ).order_by(InvestigationHistoryEvent.recorded_at.asc())).all())
-    versions = list(db.scalars(select(HistoricalEntityVersion).where(
+    versions = version_rows if version_rows is not None else list(db.scalars(select(HistoricalEntityVersion).where(
         HistoricalEntityVersion.investigation_id == investigation_id
     ).order_by(HistoricalEntityVersion.recorded_at.asc())).all())
     tracked_moments = [aware(item.recorded_at) for item in history] + [aware(item.recorded_at) for item in versions]
@@ -91,14 +94,17 @@ def _coverage(db: Session, investigation_id: str, cutoff: datetime) -> dict[str,
     }
 
 
-def _evidence_state(db: Session, investigation_id: str, cutoff: datetime, versions: dict) -> tuple[list[dict[str, Any]], list[dict[str, Any]], set[str]]:
+def _evidence_state(
+    db: Session,
+    investigation_id: str,
+    cutoff: datetime,
+    versions: dict,
+    history_rows: list[InvestigationHistoryEvent],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], set[str]]:
     rows = list(db.scalars(select(EvidenceRecord).where(
         EvidenceRecord.investigation_id == investigation_id
     ).order_by(EvidenceRecord.uploaded_at.asc())).all())
-    history = list(db.scalars(select(InvestigationHistoryEvent).where(
-        InvestigationHistoryEvent.investigation_id == investigation_id,
-        InvestigationHistoryEvent.entity_type.in_(["EVIDENCE_DOCUMENT", "EXTRACTED_RECORD"]),
-    ).order_by(InvestigationHistoryEvent.recorded_at.asc())).all())
+    history = [item for item in history_rows if item.entity_type in {"EVIDENCE_DOCUMENT", "EXTRACTED_RECORD"}]
     record_events: dict[str, list[InvestigationHistoryEvent]] = defaultdict(list)
     for item in history:
         if within(item.recorded_at, cutoff):
@@ -143,7 +149,14 @@ def _evidence_state(db: Session, investigation_id: str, cutoff: datetime, versio
     return evidence, records, available_ids
 
 
-def _timeline_state(db: Session, investigation_id: str, cutoff: datetime, available_evidence: set[str], versions: dict) -> dict[str, Any]:
+def _timeline_state(
+    db: Session,
+    investigation_id: str,
+    cutoff: datetime,
+    available_evidence: set[str],
+    versions: dict,
+    include_relationships: bool = True,
+) -> dict[str, Any]:
     rows = list(db.scalars(select(ReconstructedEvent).where(
         ReconstructedEvent.investigation_id == investigation_id
     ).order_by(ReconstructedEvent.event_date.asc())).all())
@@ -187,10 +200,12 @@ def _timeline_state(db: Session, investigation_id: str, cutoff: datetime, availa
         TemporalFinding.investigation_id == investigation_id
     ).order_by(TemporalFinding.created_at.asc())).all())
     findings = [model_dict(item) for item in finding_rows if within(item.created_at, cutoff) and (item.event_id is None or item.event_id in included)]
-    relationships = list(db.scalars(select(TemporalRelationship).where(
-        TemporalRelationship.event_id.in_(list(included.keys()) or ["__none__"])
-    )).all()) if included else []
-    relationships = [model_dict(item) for item in relationships if within(item.created_at, cutoff)]
+    relationships = []
+    if include_relationships:
+        relationship_rows = list(db.scalars(select(TemporalRelationship).where(
+            TemporalRelationship.event_id.in_(list(included.keys()) or ["__none__"])
+        )).all()) if included else []
+        relationships = [model_dict(item) for item in relationship_rows if within(item.created_at, cutoff)]
     events.sort(key=lambda item: (item.get("event_date") is None, item.get("event_date") or "9999-12-31", item.get("event_id") or ""))
     return {
         "events": events, "findings": findings, "relationships": relationships,
@@ -362,20 +377,24 @@ def reconstruct_investigation_as_of(
     investigation_id: str,
     as_of_timestamp: str | datetime | None,
     db: Session,
+    compact: bool = False,
 ) -> dict[str, Any]:
     """Reconstruct the investigation's recorded state at a UTC cutoff."""
     _require_investigation(investigation_id)
     cutoff = parse_timestamp(as_of_timestamp, field="as_of")
-    versions = _versions(db, investigation_id, cutoff)
-    coverage = _coverage(db, investigation_id, cutoff)
-    evidence, records, available_evidence = _evidence_state(db, investigation_id, cutoff, versions)
-    timeline = _timeline_state(db, investigation_id, cutoff, available_evidence, versions)
-    network = _network_state(db, investigation_id, cutoff, available_evidence)
-    contradictions = _contradiction_state(db, investigation_id, cutoff, available_evidence)
-    hypotheses = _hypothesis_state(db, investigation_id, cutoff)
     history = list(db.scalars(select(InvestigationHistoryEvent).where(
         InvestigationHistoryEvent.investigation_id == investigation_id
     ).order_by(InvestigationHistoryEvent.recorded_at.asc())).all())
+    version_rows = list(db.scalars(select(HistoricalEntityVersion).where(
+        HistoricalEntityVersion.investigation_id == investigation_id
+    ).order_by(HistoricalEntityVersion.version_number.asc())).all())
+    versions = _versions(cutoff, version_rows)
+    coverage = _coverage(db, investigation_id, cutoff, history, version_rows)
+    evidence, records, available_evidence = _evidence_state(db, investigation_id, cutoff, versions, history)
+    timeline = _timeline_state(db, investigation_id, cutoff, available_evidence, versions, include_relationships=not compact)
+    network = _network_state(db, investigation_id, cutoff, available_evidence)
+    contradictions = _contradiction_state(db, investigation_id, cutoff, available_evidence)
+    hypotheses = _hypothesis_state(db, investigation_id, cutoff)
     history_payload = [event_dict(item) for item in history if within(item.recorded_at, cutoff)]
     snapshots = list(db.scalars(select(InvestigationSnapshot).where(
         InvestigationSnapshot.investigation_id == investigation_id
