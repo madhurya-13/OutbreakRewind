@@ -370,3 +370,111 @@ export const fetchHypothesisHistory = (id: string) => get<HypothesisHistory>(`/a
 export const fetchHypothesisVersion = (id: string, versionNumber: number) => get<HypothesisVersion>(`/api/hypotheses/${encodeURIComponent(id)}/versions/${versionNumber}`)
 export const fetchHypothesisNotes = (id: string) => get<HypothesisNote[]>(`/api/hypotheses/${encodeURIComponent(id)}/notes`)
 export const addHypothesisNote = (id: string, note: string, createdBy = 'investigator') => request<HypothesisNote>(`/api/hypotheses/${encodeURIComponent(id)}/notes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note, created_by: createdBy }) })
+
+// ---------------------------------------------------------------------------
+// Milestone 7 · Investigation Rewind
+// ---------------------------------------------------------------------------
+
+export type RewindHistoryEvent = {
+  event_id: string
+  investigation_id: string
+  event_type: string
+  module: string
+  entity_type: string
+  entity_id: string
+  entity_version: number
+  description: string
+  actor_type: string
+  actor_id: string
+  source_reference: Record<string, unknown>
+  related_event_id?: string | null
+  change_reason: string
+  metadata: Record<string, unknown>
+  recorded_at: string
+  previous_state?: Record<string, unknown>
+  new_state?: Record<string, unknown>
+}
+
+export type RewindCoverage = {
+  status: string
+  tracked_since?: string | null
+  event_count: number
+  version_count: number
+  unversioned_entity_counts: Record<string, number>
+  warnings: string[]
+  reconstruction_note: string
+}
+
+export type HistoricalRecord = Record<string, unknown> & { record_id?: string; verification_status?: string; evidence_id?: string }
+
+export type RewindState = {
+  investigation_id: string
+  investigation: { investigation_id: string; investigation_name: string; description: string; outbreak_category: string; status: string; total_cases: number }
+  as_of: string
+  generated_at: string
+  mode: string
+  coverage: RewindCoverage
+  summary: Record<string, number>
+  evidence: Array<{ evidence_id: string; filename: string; format: string; status: string; uploaded_at: string; category: string; checksum: string; record_count: number; versioned?: boolean }>
+  records: HistoricalRecord[]
+  timeline: { events: Array<Record<string, unknown>>; findings: Array<Record<string, unknown>>; relationships: Array<Record<string, unknown>>; summary: Record<string, number> }
+  network: { nodes: Array<Record<string, unknown>>; relationships: Array<Record<string, unknown>>; metrics: Record<string, number> }
+  contradictions: Array<Record<string, unknown>>
+  hypotheses: Array<Record<string, unknown>>
+  snapshots: Array<{ snapshot_id: string; snapshot_name: string; snapshot_type: string; event_cutoff: string; created_at: string }>
+  recent_changes: RewindHistoryEvent[]
+  provenance: Record<string, unknown>
+}
+
+export type RewindSnapshot = {
+  snapshot_id: string
+  investigation_id: string
+  snapshot_name: string
+  description: string
+  snapshot_type: string
+  event_cutoff: string
+  event_sequence: number
+  included_entity_counts: Record<string, number>
+  snapshot_schema_version: string
+  integrity_hash: string
+  integrity_status: string
+  created_by: string
+  created_at: string
+  snapshot_data?: RewindState
+}
+
+export type RewindComparison = {
+  comparison_id?: string
+  investigation_id: string
+  state_a: { as_of: string; summary: Record<string, number> }
+  state_b: { as_of: string; summary: Record<string, number> }
+  differences: Array<{ entity_type: string; entity_id: string; category: string; difference_type: string; previous_value: unknown; current_value: unknown; change_timestamp: string; explanation: string; source_reference: unknown }>
+  by_category: Record<string, number>
+  by_change_type: Record<string, number>
+  summary: string
+  disclaimer: string
+}
+
+export type HypothesisEvolution = {
+  investigation_id: string
+  hypothesis_id: string
+  title: string
+  initial_creation: { created_at: string; created_by: string; assumptions: string[]; original_assessment: string; initial_version?: number }
+  assessments: Array<Record<string, unknown> & { assessment_label: string; evaluated_at: string; previous_assessment: string; change_explanation: string }>
+  assessment_table: Array<{ recorded_date: string; assessment: string; change_explanation: string }>
+  changes: Array<Record<string, unknown> & { change_type: string; occurred_at: string; description: string }>
+  current_assessment: string
+  disclaimer: string
+}
+
+export type RewindExport = { export_id: string; export_type: string; cutoff_timestamp: string; export_status: string; download_url?: string; metadata: Record<string, unknown> }
+
+export const fetchRewindHistory = (investigationId: string, params = '') => get<{ items: RewindHistoryEvent[]; total: number; page: number; page_size: number }>(`/api/rewind/${investigationId}/history${params}`)
+export const fetchRewindHistoryFilters = (investigationId: string) => get<{ event_types: string[]; modules: string[]; actors: string[]; entity_types: string[] }>(`/api/rewind/${investigationId}/history/filters`)
+export const fetchRewindAt = (investigationId: string, asOf: string) => get<RewindState>(`/api/rewind/${investigationId}/at?as_of=${encodeURIComponent(asOf)}`)
+export const fetchRewindCoverage = (investigationId: string, asOf = '') => get<RewindCoverage>(`/api/rewind/${investigationId}/coverage${asOf ? `?as_of=${encodeURIComponent(asOf)}` : ''}`)
+export const fetchRewindSnapshots = (investigationId: string) => get<RewindSnapshot[]>(`/api/rewind/${investigationId}/snapshots`)
+export const createRewindSnapshot = (investigationId: string, body: Record<string, unknown>) => request<RewindSnapshot>(`/api/rewind/${investigationId}/snapshots`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+export const compareRewind = (investigationId: string, body: Record<string, unknown>) => request<RewindComparison>(`/api/rewind/${investigationId}/compare`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+export const fetchHypothesisEvolution = (investigationId: string, hypothesisId: string, asOf = '') => get<HypothesisEvolution>(`/api/rewind/${investigationId}/hypotheses/${encodeURIComponent(hypothesisId)}/evolution${asOf ? `?as_of=${encodeURIComponent(asOf)}` : ''}`)
+export const exportRewind = (investigationId: string, body: Record<string, unknown>) => request<RewindExport>(`/api/rewind/${investigationId}/export`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })

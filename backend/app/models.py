@@ -372,6 +372,92 @@ class HypothesisReviewHistory(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class InvestigationHistoryEvent(Base):
+    __tablename__ = "investigation_history_events"
+    event_id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    investigation_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    entity_type: Mapped[str] = mapped_column(String(48), nullable=False, index=True)
+    entity_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    entity_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    previous_state: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    new_state: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    actor_type: Mapped[str] = mapped_column(String(24), nullable=False, default="SYSTEM")
+    actor_id: Mapped[str] = mapped_column(String(120), nullable=False, default="system")
+    source_reference: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    related_event_id: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    change_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class HistoricalEntityVersion(Base):
+    __tablename__ = "historical_entity_versions"
+    version_id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    investigation_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    entity_type: Mapped[str] = mapped_column(String(48), nullable=False, index=True)
+    entity_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    state_data: Mapped[str] = mapped_column(Text, nullable=False)
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    recorded_by: Mapped[str] = mapped_column(String(120), nullable=False, default="system")
+    change_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    source_reference: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+
+
+class InvestigationSnapshot(Base):
+    __tablename__ = "investigation_snapshots"
+    snapshot_id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    investigation_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    snapshot_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    snapshot_type: Mapped[str] = mapped_column(String(48), nullable=False, index=True)
+    snapshot_data: Mapped[str] = mapped_column(Text, nullable=False)
+    event_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    event_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    included_entity_counts: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    snapshot_schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="7.0")
+    integrity_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    integrity_status: Mapped[str] = mapped_column(String(24), nullable=False, default="VALID")
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False, default="investigator")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class InvestigationComparison(Base):
+    __tablename__ = "investigation_comparisons"
+    comparison_id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    investigation_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    snapshot_a_id: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    snapshot_b_id: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    timestamp_a: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    timestamp_b: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    comparison_data: Mapped[str] = mapped_column(Text, nullable=False)
+    comparison_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False, default="investigator")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class InvestigationExport(Base):
+    __tablename__ = "investigation_exports"
+    export_id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    investigation_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    export_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    cutoff_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    snapshot_reference: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    file_reference: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    generated_by: Mapped[str] = mapped_column(String(120), nullable=False, default="investigator")
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    export_status: Mapped[str] = mapped_column(String(24), nullable=False, default="PENDING")
+    metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+
+
 Index("uq_hypothesis_title", Hypothesis.investigation_id, Hypothesis.title, unique=True)
 Index("uq_hypothesis_source", HypothesisEvidenceLink.hypothesis_id, HypothesisEvidenceLink.source_type, HypothesisEvidenceLink.source_id, unique=True)
 Index("uq_hypothesis_version", HypothesisVersion.hypothesis_id, HypothesisVersion.version_number, unique=True)
+Index("ix_history_investigation_recorded", InvestigationHistoryEvent.investigation_id, InvestigationHistoryEvent.recorded_at)
+Index("ix_history_investigation_entity", InvestigationHistoryEvent.investigation_id, InvestigationHistoryEvent.entity_type, InvestigationHistoryEvent.entity_id)
+Index("uq_historical_entity_version", HistoricalEntityVersion.entity_type, HistoricalEntityVersion.entity_id, HistoricalEntityVersion.version_number, unique=True)
+Index("ix_snapshot_investigation_created", InvestigationSnapshot.investigation_id, InvestigationSnapshot.created_at)

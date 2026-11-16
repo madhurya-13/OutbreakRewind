@@ -221,7 +221,7 @@ def detect_contradictions(investigation_id: str, db: Session) -> dict[str, Any]:
                                  detected_count=existing_count, new_count=new_count, updated_count=updated_count,
                                  resolved_count=sum(1 for item in db.scalars(select(Contradiction).where(Contradiction.investigation_id == investigation_id)).all() if item.status in {"RESOLVED", "DISMISSED"}),
                                  run_timestamp=now, summary=json.dumps({"candidate_count": len(candidates)})))
-    db.commit()
+    db.flush()
     return {"investigation_id": investigation_id, "snapshot_version": version, "detected_count": existing_count, "new_count": new_count, "updated_count": updated_count}
 
 def contradiction_dict(db: Session, item: Contradiction) -> dict[str, Any]:

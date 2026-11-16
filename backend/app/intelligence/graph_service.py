@@ -212,7 +212,7 @@ def rebuild_graph(investigation_id: str, db: Session) -> dict[str, Any]:
     version = (db.scalar(select(GraphSnapshot.snapshot_version).where(GraphSnapshot.investigation_id == investigation_id).order_by(GraphSnapshot.snapshot_version.desc())) or 0) + 1
     db.add(GraphSnapshot(snapshot_id=f"GS-{uuid.uuid4().hex[:16].upper()}", investigation_id=investigation_id, snapshot_version=version,
                          node_count=len(nodes), relationship_count=len(relationships), metrics_json=json.dumps(metrics), filters_json="{}", created_at=now))
-    db.commit()
+    db.flush()
     return {"investigation_id": investigation_id, "snapshot_version": version, "node_count": len(nodes), "relationship_count": len(relationships), "metrics": metrics}
 
 def graph_metrics_from_graph(graph: nx.Graph, relationships: Any) -> dict[str, Any]:

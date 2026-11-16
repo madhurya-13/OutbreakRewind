@@ -1,4 +1,4 @@
-# Outbreak Rewind · Milestone 6
+# Outbreak Rewind · Milestone 7
 
 Outbreak Rewind is a synthetic public-health investigation console for reconstructing evidence timelines, case relationships, contradictions, and competing hypotheses. **Project Orion contains fictional data only; it is not a clinical or epidemiological decision system.**
 
@@ -231,3 +231,229 @@ Run backend tests with `python -m pytest backend/tests -q` from the project root
 tests with `npm test`. Assessments are qualitative and rule-based (engine rule version v6.2);
 strength and source reliability are independent investigator judgements, and the system never
 selects a winning hypothesis or produces a probability.
+
+## Milestone 7 · Investigation Rewind
+
+Investigation Rewind is the historical intelligence layer over Milestones 1–6. It answers three
+different questions without conflating them:
+
+1. **What was known at a recorded time?** — evidence, records, timeline events, relationships,
+   contradictions, hypotheses, and assessments reconstructed at a UTC cutoff.
+2. **When did the platform learn it?** — every historical view filters by *recorded* time, not by
+   the occurrence date stored on the source record.
+3. **What changed since then?** — deterministic comparisons and explanations link every change
+   back to stored history events and source records.
+
+The Rewind workspace is at `/rewind`; before-and-after comparison is at `/rewind/compare`.
+
+### Valid time vs recorded time
+
+Every reconstructed view distinguishes **valid time** (when an event, observation, or record was
+applicable in the investigation) from **recorded time** (when the information entered Outbreak
+Rewind). A laboratory result that describes a Day 1 exposure but was uploaded on Day 8 is absent
+from a Day 3 view. At a Day 9 cutoff it appears with its actual upload timestamp. Verification,
+correction, dispute, withdrawal, reconstruction, review, and assessment actions are similarly
+ordered by the time the platform recorded them.
+
+The source records are never replaced by a derived historical representation. The original
+evidence metadata, extracted record, event, relationship, contradiction, and hypothesis rows
+remain the provenance targets.
+
+### Historical data architecture
+
+Four additive tables extend the existing Milestone 1–6 schema:
+
+| Table | Purpose |
+|---|---|
+| `investigation_history_events` | Central append-only event stream across all modules, with actor, entity, event type, previous/new state JSON, source reference, change reason, related event, metadata, and UTC `recorded_at`. |
+| `historical_entity_versions` | Append-only version snapshots for mutable entities, with entity type/ID, monotonic version number, state JSON, valid-from/to, recorded-at/by, reason, and source reference. |
+| `investigation_snapshots` | Immutable point-in-time snapshots with cutoff, event sequence, entity counts, schema version, SHA-256 integrity hash, creator, and integrity status. |
+| `investigation_comparisons` / `investigation_exports` | Persisted comparison results and export metadata with secure download references. |
+
+Existing timeline snapshots, graph snapshots, contradiction snapshots, event audits, hypothesis
+versions, assessments, review history, and notes are reused as fallback provenance. The Rewind
+tables do not duplicate or delete those records.
+
+Indexes cover investigation plus recorded time, investigation plus entity identity, unique
+`(entity_type, entity_id, version_number)` version numbers, and snapshot cutoffs. All timestamps
+are stored in UTC and converted to the browser's local timezone only for display.
+
+### Event recording
+
+History recording is integrated into evidence upload and verification, timeline reconstruction and
+correction, graph rebuild and relationship review, contradiction detection and review, hypothesis
+creation/update/status/archive/evaluation/link/withdraw/note/impact actions, snapshot creation,
+comparison, and report export. System processes and investigator actions use distinct actor types.
+
+The route handlers now own the transaction: the business-state write and its history event commit
+together. Duplicate no-op reconstructions are suppressed by comparing the new state with the latest
+state for the same event type and entity. A failed request rolls back both the state change and its
+audit record.
+
+### Snapshots and integrity
+
+`POST /api/rewind/{investigation_id}/snapshots` creates a manual snapshot. The backfill script also
+creates milestone snapshots. Supported types are `MANUAL_SNAPSHOT`, `AUTOMATIC_SNAPSHOT`,
+`MILESTONE_SNAPSHOT`, `PRE_RECONSTRUCTION_SNAPSHOT`, `POST_RECONSTRUCTION_SNAPSHOT`,
+`PRE_ASSESSMENT_SNAPSHOT`, and `POST_ASSESSMENT_SNAPSHOT`.
+
+Snapshots store investigation details, evidence metadata, extracted records, timeline events and
+sources, temporal findings, graph nodes/relationships and metrics, contradictions and review
+states, hypotheses and assessments, notes, and history references. Large source documents are not
+copied into snapshots; hashes and source IDs preserve provenance.
+
+Integrity validation checks JSON deserialization, required sections, the SHA-256 content hash,
+schema compatibility, entity counts, and source references. `GET
+/api/rewind/{investigation_id}/snapshots/{snapshot_id}/integrity` returns every check. Snapshots are
+never updated in place; create a new snapshot to correct one.
+
+### Reconstruction
+
+`reconstruct_investigation_as_of(investigation_id, as_of_timestamp)` validates the investigation
+and cutoff, reads history and versions up to the cutoff, reconstructs evidence and extracted
+records, timeline events and findings, graph relationships, contradictions, hypotheses and
+assessments, then returns a structured state with provenance and a 50-event recent-change window.
+The full history is paginated separately by the history API.
+
+Rules applied by the reconstructor:
+
+- Evidence is included only when its upload time is at or before the cutoff.
+- Record verification/correction/dispute/withdrawal changes are replayed in recorded-time order.
+- Timeline events are excluded when their `recorded_at` is later than the cutoff, even when their
+  occurrence date is earlier.
+- Event date corrections and verification changes are replayed from audits/versions.
+- Relationships are excluded when any supporting evidence was not yet available.
+- Contradiction review states and hypothesis assessments are replayed only to the cutoff.
+- Current values are used only when no historical version exists, and the response marks that
+  fallback through coverage warnings rather than pretending the value was known then.
+
+The UI can still render when history is incomplete. Backfilled events and unversioned older records
+produce **PARTIAL** coverage with the warning: “Historical reconstruction is partially available
+because some records were not versioned when they were originally created.” The unversioned counts
+and backfilled event count are returned in `GET /api/rewind/{investigation_id}/coverage`.
+
+### Comparison engine
+
+`POST /api/rewind/{investigation_id}/compare` accepts either two timestamps or two snapshot IDs.
+It compares evidence, extracted records, timeline events/findings, network relationships,
+contradictions, and hypotheses. Each difference contains entity type/ID, category, classification
+(`ADDED`, `REMOVED`, `MODIFIED`, `STATUS_CHANGED`, `RECLASSIFIED`, `VERIFIED`, `DISPUTED`,
+`RESOLVED`, `REOPENED`, `UNKNOWN`), previous/current values, change timestamp, explanation, and
+source reference. Summary counts are calculated from the differences; the interface never invents
+statistics.
+
+### Hypothesis evolution
+
+`GET /api/rewind/{investigation_id}/hypotheses/{hypothesis_id}/evolution` returns the initial
+assumptions, original assessment, every stored assessment with recorded time, previous/new labels,
+change explanation, and hypothesis change events. The comparison endpoint can compare snapshots at
+the initial assessment, after new evidence, and at the current cutoff. Explanations are deterministic
+and explicitly describe available evidence; they do not claim that an assessment proves causation.
+
+### Historical reports
+
+`POST /api/rewind/{investigation_id}/export` generates a real PDF or CSV using the existing PyMuPDF
+dependency. The PDF includes investigation overview, cutoff, coverage/limitations, status, evidence,
+timeline, network, contradictions, hypotheses/assessments, major changes, investigator decisions,
+unresolved questions, source references, generation timestamp, page numbers, and the required
+disclaimer. CSV preserves headers, UTC timestamps, event type, module, actor, source, previous state,
+and new state. Exports are stored under the application's evidence storage with metadata; downloads
+use the authorized export endpoint rather than exposing arbitrary files.
+
+### Rewind API
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/rewind/{id}/history` | Paginated chronological event history; filters for event type, module, actor, entity, and date range. |
+| GET | `/api/rewind/{id}/history/filters` | Available event types, modules, actors, and entity types. |
+| GET | `/api/rewind/{id}/history/{event_id}` | One event with previous/new state and provenance. |
+| POST | `/api/rewind/{id}/snapshots` | Create an immutable manual snapshot. |
+| GET | `/api/rewind/{id}/snapshots` | List snapshots. |
+| GET | `/api/rewind/{id}/snapshots/{snapshot_id}` | Snapshot metadata and contents. |
+| GET | `/api/rewind/{id}/snapshots/{snapshot_id}/integrity` | Run all integrity checks. |
+| GET | `/api/rewind/{id}/at?as_of=...` | Full point-in-time reconstruction. |
+| GET | `/api/rewind/{id}/at/{timestamp}/summary` | Historical summary. |
+| GET | `/api/rewind/{id}/at/{timestamp}/timeline` | Historical timeline. |
+| GET | `/api/rewind/{id}/at/{timestamp}/network` | Historical network. |
+| GET | `/api/rewind/{id}/at/{timestamp}/contradictions` | Historical contradictions. |
+| GET | `/api/rewind/{id}/at/{timestamp}/hypotheses` | Historical hypotheses and assessments. |
+| POST | `/api/rewind/{id}/compare` | Compare two snapshots or timestamps. |
+| GET | `/api/rewind/{id}/comparisons` | Saved comparisons. |
+| GET | `/api/rewind/{id}/hypotheses/{hypothesis_id}/evolution` | Assessment evolution and explanations. |
+| GET | `/api/rewind/{id}/hypotheses/{hypothesis_id}/changes` | Hypothesis history changes. |
+| POST | `/api/rewind/{id}/export` | Generate PDF or CSV for a cutoff/snapshot. |
+| GET | `/api/rewind/{id}/exports` | List generated reports. |
+| GET | `/api/rewind/{id}/exports/{export_id}` | Export metadata. |
+| GET | `/api/rewind/{id}/exports/{export_id}/download` | Authorized report download. |
+| GET | `/api/rewind/{id}/coverage` | Historical coverage and warnings. |
+| POST | `/api/rewind/{id}/validate` | Validate reconstruction consistency. |
+
+### Database migration
+
+The additive migration is `0006_investigation_rewind`; it depends on
+`0005_hypothesis_intelligence` and uses guarded table/index creation so an existing SQLite database
+whose tables were created by the application startup is adopted without data loss. Run it from the
+repository root:
+
+```powershell
+cd backend
+..\.venv\Scripts\python.exe -m alembic upgrade head
+```
+
+For PostgreSQL, run `docker compose up -d db` first and set `DATABASE_URL` as described in Setup.
+
+### Project ORION walkthrough
+
+The synthetic ORION data is retained. The history backfill script reads existing Milestone 2–6
+records and writes append-only events, versions, and milestone snapshots without changing source
+records:
+
+```powershell
+cd backend
+..\.venv\Scripts\python.exe scripts/backfill_rewind_history.py
+```
+
+The resulting walkthrough demonstrates the requested lifecycle:
+
+- **Stage 1 — Initial investigation:** 13 evidence documents, 26 reconstructed events, 61
+  relationships, and 23 detected contradictions at the first checkpoint. No hypotheses yet.
+- **Stage 2 — Additional evidence:** contact and location evidence, new events/relationships, and
+  additional contradictions appear as their recorded times pass.
+- **Stage 3 — Investigator review:** verification, date correction, relationship dispute,
+  contradiction review, and hypothesis evidence reclassification events are in the history stream.
+- **Stage 4 — New findings:** additional laboratory/evidence records, new contradictions, and
+  changed hypothesis assessments.
+- **Stage 5 — Current state:** 40 evidence documents, 197 reconstructed events, 599 relationships,
+  128 contradictions, 5 hypotheses, and the latest assessments.
+
+The milestone snapshots are named `Stage 1` through `Stage 5`; the comparison page can compare any
+two of them. Records whose history predates tracking are marked as backfilled with PARTIAL coverage.
+
+### Testing
+
+```powershell
+# from the repository root
+..\.venv\Scripts\python.exe -m pytest backend/tests -q
+npm test
+npm run build
+```
+
+Milestone 7 tests cover history recording, future-evidence exclusion, invalid cutoffs and
+investigations, immutable snapshots, integrity checks, comparisons of timestamps, PDF/CSV exports,
+hypothesis evolution, and reconstruction validation. Frontend tests cover history filtering,
+recorded-time mode, cutoff conversion, coverage warnings, the rewind shell, and the comparison
+shell. `python -m compileall -q backend/app` is also run.
+
+### Known limitations
+
+- Historical coverage for records created before Milestone 7 is reconstructed from retained rows
+  and timestamps; intermediate values that were overwritten are not recoverable. Coverage is marked
+  PARTIAL and is never silently presented as complete.
+- Replay is client-side and intentionally does not persist a session. It is read-only and stops at
+  the latest recorded event.
+- The comparative explanation engine is deterministic and rule-based. No LLM is required, and no
+  unsupported causal or scientific conclusion is generated.
+- Point-in-time reconstruction is computed per request from append-only versions and audits; it is
+  not cached. This favors correctness over a cache that could become stale.
+- Snapshot payloads are stored as JSON text. Very large investigations should use PostgreSQL and
+  appropriate retention limits; source documents are referenced rather than duplicated.

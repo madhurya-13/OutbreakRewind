@@ -53,9 +53,12 @@ from .intelligence.hypothesis.hypothesis_versioning import version_detail
 from .intelligence.hypothesis.serializers import version_dict
 from .intelligence.hypothesis.serializers import hypothesis_dict as _hypothesis_dict
 from .intelligence.hypothesis.serializers import now as hypothesis_now
+from .intelligence.rewind.api import router as rewind_router
+from .intelligence.rewind.history_recorder import record_entity_version, record_history_event
 
 app = FastAPI(title="Outbreak Rewind API", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=settings.allowed_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.include_router(rewind_router)
 
 SEED = [
     ("EV-042", date(2024, 6, 18), "Port Meridian transmission spike", "Port Meridian, OR", "critical", "Epidemiology", "Wastewater sampling exceeds alert threshold for the third consecutive day.", "ORION / NW-7"),
@@ -135,6 +138,22 @@ def upload_evidence(
                 db, investigation_id, "EVIDENCE_DOCUMENT", item.id,
                 trigger="EVIDENCE_UPLOADED", include_unlinked=True,
             )
+            state = {**evidence_dict(item), "records": json.loads(item.records_json)}
+            record_entity_version(db, investigation_id, "EVIDENCE_DOCUMENT", item.id, state, recorded_by="system", change_reason="Evidence document ingested", source_reference={"evidence_id": item.id, "checksum": item.checksum})
+            record_history_event(
+                db, investigation_id, "EVIDENCE_UPLOADED", "EVIDENCE_DOCUMENT", item.id,
+                f"Evidence '{item.filename}' was uploaded and extracted.",
+                new_state=state, actor_type="SYSTEM", actor_id="ingestion",
+                source_reference={"evidence_id": item.id, "checksum": item.checksum},
+                metadata={"record_count": item.record_count, "status": item.status},
+            )
+            if item.record_count:
+                record_history_event(
+                    db, investigation_id, "EVIDENCE_RECORD_EXTRACTED", "EVIDENCE_DOCUMENT", item.id,
+                    f"Extracted {item.record_count} normalized record(s) from '{item.filename}'.",
+                    new_state={"record_count": item.record_count, "record_ids": [record.get("record_id") for record in json.loads(item.records_json) if isinstance(record, dict)]},
+                    actor_type="SYSTEM", actor_id="extraction", source_reference={"evidence_id": item.id},
+                )
             db.commit()
             results.append(evidence_dict(item))
         except ValueError as exc:
@@ -182,11 +201,23 @@ def verify_record(record_id: str, verified: bool = True, db: Session = Depends(g
         records = json.loads(item.records_json)
         for record in records:
             if record.get("record_id") == record_id:
+                previous_status = record.get("verification_status", "PENDING")
                 record["verification_status"] = "VERIFIED" if verified else "REJECTED"
                 item.records_json = json.dumps(records)
                 analyze_source_change(
                     db, item.investigation_id, "EXTRACTED_RECORD", record_id,
                     trigger="EXTRACTED_RECORD_VERIFIED", include_unlinked=False,
+                )
+                record_entity_version(db, item.investigation_id, "EXTRACTED_RECORD", record_id, {**record, "evidence_id": item.id}, recorded_by="investigator", change_reason="Investigator record verification", source_reference={"evidence_id": item.id, "record_id": record_id})
+                record_history_event(
+                    db, item.investigation_id,
+                    "EVIDENCE_RECORD_VERIFIED" if verified else "EVIDENCE_RECORD_DISPUTED",
+                    "EXTRACTED_RECORD", record_id,
+                    f"Extracted record {record_id} was {'verified' if verified else 'disputed'} by an investigator.",
+                    previous_state={"verification_status": previous_status},
+                    new_state={"verification_status": record["verification_status"]},
+                    actor_type="INVESTIGATOR", actor_id="investigator",
+                    source_reference={"evidence_id": item.id, "record_id": record_id},
                 )
                 db.commit()
                 return {"record_id": record_id, "verification_status": record["verification_status"]}
@@ -219,7 +250,17 @@ def reconstruct(investigation_id: str, db: Session = Depends(get_db)) -> dict:
     if not any(item["investigation_id"] == investigation_id for item in INVESTIGATIONS):
         raise HTTPException(status_code=404, detail="Investigation not found")
     try:
-        return reconstruct_timeline(investigation_id, db)
+        result = reconstruct_timeline(investigation_id, db)
+        record_history_event(
+            db, investigation_id, "TIMELINE_RECONSTRUCTED", "TIMELINE", investigation_id,
+            f"Timeline reconstructed from {result['source_evidence_count']} evidence document(s); {result['event_count']} event(s) are now recorded.",
+            new_state=result, actor_type="SYSTEM", actor_id="temporal_engine",
+            source_reference={"investigation_id": investigation_id},
+            metadata={"version_number": result["version_number"]}, dedupe=True,
+        )
+        record_entity_version(db, investigation_id, "TIMELINE", investigation_id, result, recorded_by="system", change_reason="Timeline reconstructed", source_reference={"investigation_id": investigation_id})
+        db.commit()
+        return result
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail="Timeline reconstruction failed") from exc
@@ -320,11 +361,21 @@ def verify_timeline_event(event_id: str, verified: bool = True, db: Session = De
     event = db.get(ReconstructedEvent, event_id)
     if not event:
         raise HTTPException(status_code=404, detail="Reconstructed event not found")
+    previous_status = event.verification_status
     event.verification_status = "VERIFIED" if verified else "REJECTED"
     event.updated_at = datetime.now(timezone.utc)
     analyze_source_change(
         db, event.investigation_id, "RECONSTRUCTED_EVENT", event_id,
         trigger="TIMELINE_EVENT_VERIFIED", include_unlinked=False,
+    )
+    record_entity_version(db, event.investigation_id, "RECONSTRUCTED_EVENT", event_id, event_to_dict(db, event), recorded_by="investigator", change_reason="Event verification decision", source_reference={"event_id": event_id})
+    record_history_event(
+        db, event.investigation_id, "EVENT_VERIFIED" if verified else "EVENT_DISPUTED",
+        "RECONSTRUCTED_EVENT", event_id,
+        f"Reconstructed event {event_id} was {'verified' if verified else 'disputed'}.",
+        previous_state={"verification_status": previous_status},
+        new_state={"verification_status": event.verification_status},
+        actor_type="INVESTIGATOR", actor_id="investigator", source_reference={"event_id": event_id},
     )
     db.commit()
     return {"event_id": event_id, "verification_status": event.verification_status}
@@ -356,6 +407,15 @@ def correct_timeline_event(event_id: str, changes: EventCorrection, db: Session 
         db, event.investigation_id, "RECONSTRUCTED_EVENT", event_id,
         trigger="TIMELINE_EVENT_CORRECTED", include_unlinked=False,
     )
+    record_entity_version(db, event.investigation_id, "RECONSTRUCTED_EVENT", event_id, event_to_dict(db, event), recorded_by=actor, change_reason=f"Corrected fields: {', '.join(sorted(update))}", source_reference={"event_id": event_id})
+    record_history_event(
+        db, event.investigation_id,
+        "EVENT_DATE_REVISED" if ({"event_date", "event_end_date"} & set(update)) else "EVENT_UPDATED",
+        "RECONSTRUCTED_EVENT", event_id,
+        f"Investigator corrected reconstructed event {event_id}: {', '.join(sorted(update))}.",
+        previous_state=previous, new_state=update, actor_type="INVESTIGATOR", actor_id=actor,
+        source_reference={"event_id": event_id}, change_reason="Timeline event correction",
+    )
     db.commit()
     return event_to_dict(db, event)
 
@@ -373,6 +433,14 @@ def rebuild_case_graph(investigation_id: str, db: Session = Depends(get_db)) -> 
                 db, investigation_id, "GRAPH_RELATIONSHIP", relationship.relationship_id,
                 trigger="GRAPH_RELATIONSHIPS_REBUILT", include_unlinked=False,
             )
+        record_history_event(
+            db, investigation_id, "NETWORK_RECONSTRUCTED", "GRAPH", investigation_id,
+            f"Case network rebuilt with {result['node_count']} node(s) and {result['relationship_count']} relationship(s).",
+            new_state=result, actor_type="SYSTEM", actor_id="graph_engine",
+            source_reference={"investigation_id": investigation_id},
+            metadata={"snapshot_version": result["snapshot_version"]}, dedupe=True,
+        )
+        record_entity_version(db, investigation_id, "GRAPH", investigation_id, result, recorded_by="system", change_reason="Network reconstructed", source_reference={"investigation_id": investigation_id})
         db.commit()
         return result
     except Exception as exc:
@@ -468,6 +536,17 @@ def review_graph_relationship(relationship_id: str, review: RelationshipReview, 
         db, relationship.investigation_id, "GRAPH_RELATIONSHIP", relationship_id,
         trigger="GRAPH_RELATIONSHIP_REVIEWED", include_unlinked=False,
     )
+    detail = relationship_detail(db, relationship_id) or {}
+    record_entity_version(db, relationship.investigation_id, "GRAPH_RELATIONSHIP", relationship_id, detail, recorded_by="investigator", change_reason="Relationship review", source_reference={"relationship_id": relationship_id})
+    record_history_event(
+        db, relationship.investigation_id,
+        "RELATIONSHIP_DISPUTED" if review.verification_status == "REJECTED" else "RELATIONSHIP_REVIEWED",
+        "GRAPH_RELATIONSHIP", relationship_id,
+        f"Relationship {relationship_id} review changed from {previous} to {relationship.verification_status}.",
+        previous_state={"verification_status": previous}, new_state={"verification_status": relationship.verification_status},
+        actor_type="INVESTIGATOR", actor_id="investigator",
+        source_reference={"relationship_id": relationship_id}, change_reason=review.reviewer_note,
+    )
     db.commit()
     return relationship_detail(db, relationship_id) or {}
 
@@ -477,6 +556,7 @@ def detect_investigation_contradictions(investigation_id: str, db: Session = Dep
     if not any(item["investigation_id"] == investigation_id for item in INVESTIGATIONS):
         raise HTTPException(status_code=404, detail="Investigation not found")
     try:
+        started = datetime.now(timezone.utc)
         result = detect_contradictions(investigation_id, db)
         for contradiction in db.scalars(select(Contradiction).where(
             Contradiction.investigation_id == investigation_id
@@ -485,6 +565,23 @@ def detect_investigation_contradictions(investigation_id: str, db: Session = Dep
                 db, investigation_id, "CONTRADICTION", contradiction.contradiction_id,
                 trigger="CONTRADICTION_DETECTED", include_unlinked=False,
             )
+        new_findings = [item for item in db.scalars(select(Contradiction).where(
+            Contradiction.investigation_id == investigation_id
+        )).all() if (item.first_detected_at.replace(tzinfo=timezone.utc) if item.first_detected_at.tzinfo is None else item.first_detected_at) >= started]
+        for finding in new_findings:
+            record_history_event(
+                db, investigation_id, "CONTRADICTION_DETECTED", "CONTRADICTION", finding.contradiction_id,
+                f"Contradiction '{finding.title}' was detected and requires investigator review.",
+                new_state={"status": finding.status, "severity": finding.severity, "type": finding.contradiction_type},
+                actor_type="SYSTEM", actor_id="contradiction_engine",
+                source_reference={"contradiction_id": finding.contradiction_id},
+            )
+        record_history_event(
+            db, investigation_id, "CONTRADICTION_DETECTED", "CONTRADICTION_RUN", investigation_id,
+            f"Contradiction detection completed: {result['new_count']} new and {result['updated_count']} updated finding(s).",
+            new_state=result, actor_type="SYSTEM", actor_id="contradiction_engine",
+            source_reference={"investigation_id": investigation_id}, dedupe=True,
+        )
         db.commit()
         return result
     except Exception as exc:
@@ -562,6 +659,19 @@ def review_contradiction(contradiction_id: str, review: ContradictionReviewReque
         db, item.investigation_id, "CONTRADICTION", contradiction_id,
         trigger="CONTRADICTION_REVIEWED", include_unlinked=False,
     )
+    event_type = {
+        "UNDER_REVIEW": "CONTRADICTION_REVIEWED", "CONFIRMED_CONFLICT": "CONTRADICTION_CONFIRMED",
+        "RESOLVED": "CONTRADICTION_RESOLVED", "DISMISSED": "CONTRADICTION_DISMISSED",
+        "REOPENED": "CONTRADICTION_REOPENED",
+    }.get(review.action, "CONTRADICTION_REVIEWED")
+    record_entity_version(db, item.investigation_id, "CONTRADICTION", contradiction_id, contradiction_dict(db, item), recorded_by=review.reviewer, change_reason=f"Contradiction {review.action.lower()}", source_reference={"contradiction_id": contradiction_id})
+    record_history_event(
+        db, item.investigation_id, event_type, "CONTRADICTION", contradiction_id,
+        f"Contradiction {contradiction_id} changed from {previous} to {review.action}.",
+        previous_state={"status": previous}, new_state={"status": review.action},
+        actor_type="INVESTIGATOR", actor_id=review.reviewer,
+        source_reference={"contradiction_id": contradiction_id}, change_reason=review.review_note,
+    )
     db.commit()
     return contradiction_dict(db, item)
 
@@ -610,6 +720,13 @@ def create_hypothesis(
     within the investigation (case-insensitive). Unknown categories may be supplied
     as uppercase custom identifiers."""
     item = create_hypothesis_service(db, investigation_id, request.model_dump())
+    record_history_event(
+        db, investigation_id, "HYPOTHESIS_CREATED", "HYPOTHESIS", item.id,
+        f"Competing hypothesis '{item.title}' was created.",
+        new_state=hypothesis_dict(item), actor_type="INVESTIGATOR", actor_id=request.created_by,
+        source_reference={"hypothesis_id": item.id}, change_reason="Initial hypothesis creation",
+    )
+    record_entity_version(db, investigation_id, "HYPOTHESIS", item.id, hypothesis_dict(item), recorded_by=request.created_by, change_reason="Hypothesis created", source_reference={"hypothesis_id": item.id})
     db.commit()
     db.refresh(item)
     return hypothesis_dict(item)
@@ -674,6 +791,13 @@ def update_hypothesis(
 ) -> dict:
     item = _get_hypothesis(db, hypothesis_id)
     update_hypothesis_service(db, item, request.model_dump(exclude_none=True))
+    record_history_event(
+        db, item.investigation_id, "HYPOTHESIS_UPDATED", "HYPOTHESIS", item.id,
+        f"Hypothesis '{item.title}' details were updated.",
+        new_state=hypothesis_dict(item), actor_type="INVESTIGATOR", actor_id=request.updated_by,
+        source_reference={"hypothesis_id": item.id}, change_reason=request.reason,
+    )
+    record_entity_version(db, item.investigation_id, "HYPOTHESIS", item.id, hypothesis_dict(item), recorded_by=request.updated_by, change_reason="Hypothesis details updated", source_reference={"hypothesis_id": item.id})
     db.commit()
     db.refresh(item)
     return hypothesis_dict(item)
@@ -687,7 +811,15 @@ def update_hypothesis_status(
     db: Session = Depends(get_db),
 ) -> dict:
     item = _get_hypothesis(db, hypothesis_id)
+    previous_status = item.status
     update_status_service(db, item, request.status, request.explanation, request.updated_by)
+    record_history_event(
+        db, item.investigation_id, "HYPOTHESIS_STATUS_CHANGED", "HYPOTHESIS", item.id,
+        f"Hypothesis '{item.title}' status changed from {previous_status} to {request.status}.",
+        previous_state={"status": previous_status}, new_state={"status": request.status},
+        actor_type="INVESTIGATOR", actor_id=request.updated_by,
+        source_reference={"hypothesis_id": item.id}, change_reason=request.explanation,
+    )
     db.commit()
     db.refresh(item)
     return hypothesis_dict(item)
@@ -702,7 +834,15 @@ def archive_hypothesis(
     archived_by: str = "investigator",
 ) -> dict:
     item = _get_hypothesis(db, hypothesis_id)
+    previous_status = item.status
     archive_hypothesis_service(db, item, actor=archived_by, reason=reason)
+    record_history_event(
+        db, item.investigation_id, "HYPOTHESIS_ARCHIVED", "HYPOTHESIS", item.id,
+        f"Hypothesis '{item.title}' was archived; its history and evidence links were retained.",
+        previous_state={"status": previous_status}, new_state={"status": "ARCHIVED"},
+        actor_type="INVESTIGATOR", actor_id=archived_by,
+        source_reference={"hypothesis_id": item.id}, change_reason=reason,
+    )
     db.commit()
     db.refresh(item)
     return hypothesis_dict(item)
@@ -717,6 +857,14 @@ def link_hypothesis_evidence(
 ) -> dict:
     hypothesis = _get_hypothesis(db, hypothesis_id)
     link = link_evidence(db, hypothesis, request.model_dump())
+    record_history_event(
+        db, hypothesis.investigation_id, "HYPOTHESIS_EVIDENCE_LINKED", "HYPOTHESIS_EVIDENCE_LINK", link.id,
+        f"Evidence '{link.source_title or link.source_id}' was linked to hypothesis '{hypothesis.title}' as {link.classification}.",
+        new_state=link_dict(link), actor_type="INVESTIGATOR", actor_id=request.linked_by,
+        source_reference={"hypothesis_id": hypothesis.id, "source_type": link.source_type, "source_id": link.source_id},
+        change_reason=request.explanation,
+    )
+    record_entity_version(db, hypothesis.investigation_id, "HYPOTHESIS_EVIDENCE_LINK", link.id, link_dict(link), recorded_by=request.linked_by, change_reason="Evidence linked", source_reference={"hypothesis_id": hypothesis.id})
     db.commit()
     db.refresh(link)
     return link_dict(link)
@@ -748,7 +896,20 @@ def update_hypothesis_evidence(
 ) -> dict:
     link = _get_link(db, link_id)
     hypothesis = _get_hypothesis(db, link.hypothesis_id)
+    previous_classification = link.classification
+    previous_review_status = link.review_status
     update_link(db, link, hypothesis, request.model_dump(exclude_none=True))
+    record_history_event(
+        db, hypothesis.investigation_id, "HYPOTHESIS_EVIDENCE_RECLASSIFIED" if link.classification != previous_classification else "HYPOTHESIS_EVIDENCE_UPDATED",
+        "HYPOTHESIS_EVIDENCE_LINK", link.id,
+        f"Evidence link '{link.source_title or link.source_id}' was updated.",
+        previous_state={"classification": previous_classification, "review_status": previous_review_status},
+        new_state={"classification": link.classification, "review_status": link.review_status},
+        actor_type="INVESTIGATOR", actor_id=request.updated_by,
+        source_reference={"hypothesis_id": hypothesis.id, "link_id": link.id},
+        change_reason=request.investigator_notes or "Evidence link assessment updated",
+    )
+    record_entity_version(db, hypothesis.investigation_id, "HYPOTHESIS_EVIDENCE_LINK", link.id, link_dict(link), recorded_by=request.updated_by, change_reason="Evidence link updated", source_reference={"hypothesis_id": hypothesis.id})
     db.commit()
     db.refresh(link)
     return link_dict(link)
@@ -763,7 +924,16 @@ def withdraw_hypothesis_evidence(
 ) -> dict:
     link = _get_link(db, link_id)
     hypothesis = _get_hypothesis(db, link.hypothesis_id)
+    previous_status = link.review_status
     withdraw_link(db, link, hypothesis, actor=withdrawn_by)
+    record_history_event(
+        db, hypothesis.investigation_id, "HYPOTHESIS_EVIDENCE_WITHDRAWN", "HYPOTHESIS_EVIDENCE_LINK", link.id,
+        f"Evidence link '{link.source_title or link.source_id}' was withdrawn from hypothesis '{hypothesis.title}'.",
+        previous_state={"review_status": previous_status}, new_state={"review_status": "WITHDRAWN"},
+        actor_type="INVESTIGATOR", actor_id=withdrawn_by,
+        source_reference={"hypothesis_id": hypothesis.id, "link_id": link.id},
+        change_reason="Evidence link withdrawn; source retained",
+    )
     db.commit()
     db.refresh(link)
     return link_dict(link)
@@ -774,6 +944,15 @@ def withdraw_hypothesis_evidence(
 def evaluate_one_hypothesis(hypothesis_id: str, db: Session = Depends(get_db)) -> dict:
     hypothesis = _get_hypothesis(db, hypothesis_id)
     assessment = evaluate_hypothesis_service(db, hypothesis)
+    record_history_event(
+        db, hypothesis.investigation_id, "HYPOTHESIS_EVALUATED", "HYPOTHESIS", hypothesis.id,
+        f"Hypothesis '{hypothesis.title}' was reassessed as {assessment.assessment_label}.",
+        new_state={**assessment_dict(assessment), "hypothesis_status": hypothesis.status},
+        actor_type="SYSTEM", actor_id="hypothesis_evaluator",
+        source_reference={"hypothesis_id": hypothesis.id, "assessment_id": assessment.id},
+        change_reason="Deterministic qualitative reassessment against linked evidence",
+    )
+    record_entity_version(db, hypothesis.investigation_id, "HYPOTHESIS_ASSESSMENT", assessment.id, assessment_dict(assessment), recorded_by="system", change_reason="Assessment recorded", source_reference={"hypothesis_id": hypothesis.id})
     db.commit()
     return assessment_dict(assessment)
 
@@ -844,6 +1023,13 @@ def review_hypothesis_impact(
 ) -> dict:
     hypothesis = _get_hypothesis(db, hypothesis_id)
     item = review_impact(db, hypothesis, impact_id, request.reviewed_by, request.explanation)
+    record_history_event(
+        db, hypothesis.investigation_id, "HYPOTHESIS_IMPACT_REVIEWED", "HYPOTHESIS_IMPACT", impact_id,
+        f"Investigator reviewed an evidence-impact item for hypothesis '{hypothesis.title}'.",
+        new_state=impact_dict(item), actor_type="INVESTIGATOR", actor_id=request.reviewed_by,
+        source_reference={"hypothesis_id": hypothesis.id, "impact_id": impact_id},
+        change_reason=request.explanation,
+    )
     db.commit()
     db.refresh(item)
     return impact_dict(item)
@@ -875,6 +1061,12 @@ def add_hypothesis_note(
 ) -> dict:
     hypothesis = _get_hypothesis(db, hypothesis_id)
     item = add_note(db, hypothesis, request.note, request.created_by)
+    record_history_event(
+        db, hypothesis.investigation_id, "INVESTIGATOR_NOTE_ADDED", "HYPOTHESIS_NOTE", item.id,
+        f"An investigator note was added to hypothesis '{hypothesis.title}'.",
+        new_state=note_dict(item), actor_type="INVESTIGATOR", actor_id=request.created_by,
+        source_reference={"hypothesis_id": hypothesis.id, "note_id": item.id},
+    )
     db.commit()
     db.refresh(item)
     return note_dict(item)

@@ -312,7 +312,7 @@ def reconstruct_timeline(investigation_id: str, db: Session) -> dict[str, Any]:
         version_number=version, event_count=len(events), generated_at=now,
         reconstruction_metadata=json.dumps({"source_evidence": len(evidence_items), "candidate_events": len(candidates)}),
     ))
-    db.commit()
+    db.flush()
     return {"investigation_id": investigation_id, "version_number": version, "event_count": len(events), "source_evidence_count": len(evidence_items)}
 
 
